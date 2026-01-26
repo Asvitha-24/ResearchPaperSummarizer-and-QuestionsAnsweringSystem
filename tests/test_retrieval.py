@@ -3,7 +3,13 @@ Unit tests for the retrieval module.
 """
 
 import pytest
-from retrieval import (
+import sys
+from pathlib import Path
+
+# Add parent directory to path so we can import src modules
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.retrieval import (
     TFIDFRetriever,
     SemanticRetriever,
     HybridRetriever
