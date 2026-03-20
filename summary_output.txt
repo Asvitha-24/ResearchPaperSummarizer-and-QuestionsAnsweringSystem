@@ -1,0 +1,14 @@
+
+================================================================================
+✅ BART GENERATED SUMMARY
+================================================================================
+
+Artificial intelligence (AI) is the intelligence of computer systems, in contrast to that of humans or animals. Machine learning is a subset of artificial intelligence that focuses on the development of computer programs that can access data. Natural language processing is a subfield of linguistics, computer science, and artificial intelligence. Computer vision is an interdisciplinary scientific field that deals with how digital cameras and computers can gain high-level understanding. These technologies are transforming how we work, learn, and communicate with each other globally.
+
+================================================================================
+📊 STATISTICS
+================================================================================
+Original Length:    708 characters
+Summary Length:     587 characters
+Compression Ratio:  82.91%
+================================================================================

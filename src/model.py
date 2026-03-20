@@ -33,12 +33,16 @@ class SummarizationModel:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model_name = model_name
         
-        # Load summarization pipeline
-        self.pipeline = pipeline(
-            "summarization",
-            model=model_name,
-            device=0 if torch.cuda.is_available() else -1
-        )
+        # Load BART tokenizer and model directly
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+            self.model.to(self.device)
+            print(f"[OK] BART model loaded successfully: {model_name}")
+        except Exception as e:
+            print(f"[ERROR] Failed to load BART model: {e}")
+            self.tokenizer = None
+            self.model = None
     
     def summarize(self, 
                   text: str,
@@ -59,10 +63,30 @@ class SummarizationModel:
             return text
         
         try:
-            summary = self.pipeline(text, max_length=max_length, min_length=min_length, do_sample=False)
-            return summary[0]['summary_text']
+            if self.model is None or self.tokenizer is None:
+                print("[WARN] BART model not loaded, returning text truncated")
+                return text[:500]
+            
+            # Tokenize input text
+            inputs = self.tokenizer(text, max_length=1024, truncation=True, return_tensors="pt")
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            
+            # Generate summary
+            summary_ids = self.model.generate(
+                **inputs,
+                max_length=max_length,
+                min_length=min_length,
+                length_penalty=2.0,
+                num_beams=4,
+                early_stopping=True
+            )
+            
+            # Decode summary
+            summary = self.tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+            return summary
+            
         except Exception as e:
-            print(f"Error in summarization: {e}")
+            print(f"[ERROR] Error in summarization: {e}")
             return text[:500]
     
     def batch_summarize(self,
@@ -248,9 +272,30 @@ class ResearchPaperQASystem:
             qa_model: Model for question answering
             search_model: Model for semantic search
         """
-        self.summarizer = SummarizationModel(summarization_model)
-        self.qa_model = QuestionAnsweringModel(qa_model)
-        self.searcher = SemanticSearcher(search_model)
+        # Initialize summarizer (required)
+        try:
+            self.summarizer = SummarizationModel(summarization_model)
+            print("[OK] Summarizer initialized")
+        except Exception as e:
+            print(f"[ERROR] Failed to initialize summarizer: {e}")
+            self.summarizer = None
+        
+        # Initialize QA model (optional)
+        try:
+            self.qa_model = QuestionAnsweringModel(qa_model)
+            print("[OK] QA model initialized")
+        except Exception as e:
+            print(f"[WARN] Failed to initialize QA model (optional): {e}")
+            self.qa_model = None
+        
+        # Initialize searcher (optional)
+        try:
+            self.searcher = SemanticSearcher(search_model)
+            print("[OK] Semantic searcher initialized")
+        except Exception as e:
+            print(f"[WARN] Failed to initialize semantic searcher (optional): {e}")
+            self.searcher = None
+        
         self.indexed_papers = {}
     
     def index_papers(self, papers_data: Dict[str, str]) -> None:

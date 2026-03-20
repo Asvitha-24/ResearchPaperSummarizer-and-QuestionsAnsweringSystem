@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BART Document Summarizer - Fixed Prototype</title>
+    <!-- ✅ CORRECT IMPLEMENTATION USING /api/summarize-file -->
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 32px;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 16px;
+        }
+        
+        .upload-section {
+            background: #f8f9fa;
+            border: 2px dashed #667eea;
+            border-radius: 8px;
+            padding: 30px;
+            text-align: center;
+            margin-bottom: 30px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .upload-section:hover {
+            border-color: #764ba2;
+            background: #f0f2ff;
+        }
+        
+        .upload-section input[type="file"] {
+            display: none;
+        }
+        
+        .upload-text {
+            color: #666;
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+        
+        .upload-hint {
+            color: #999;
+            font-size: 14px;
+        }
+        
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            margin-top: 10px;
+        }
+        
+        button:hover {
+            background: #764ba2;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .spinner {
+            display: none;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 0.8s linear infinite;
+            margin: 0 10px;
+            vertical-align: middle;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .summary-section {
+            margin-top: 30px;
+            display: none;
+        }
+        
+        .summary-section.show {
+            display: block;
+        }
+        
+        .summary-box {
+            background: #f0f7ff;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+        
+        .summary-title {
+            color: #667eea;
+            font-weight: 600;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 1px;
+        }
+        
+        .summary-text {
+            color: #333;
+            line-height: 1.6;
+            font-size: 15px;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        .stat-box {
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            padding: 15px;
+            border-radius: 6px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            color: #667eea;
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        .stat-label {
+            color: #666;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+        
+        .error {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            color: #856404;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .error.show {
+            display: block;
+        }
+        
+        .success {
+            background: #d4edda;
+            border: 1px solid #28a745;
+            color: #155724;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .success.show {
+            display: block;
+        }
+        
+        .code-section {
+            background: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 30px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            overflow-x: auto;
+        }
+        
+        .code-section pre {
+            margin: 0;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Upload & Summarize</h1>
+        <p class="subtitle">Upload your research papers and get instant intelligent summaries</p>
+        
+        <div class="error" id="errorBox"></div>
+        <div class="success" id="successBox"></div>
+        
+        <div class="upload-section" onclick="document.getElementById('fileInput').click()">
+            <input type="file" id="fileInput" accept=".docx,.pdf,.txt" />
+            <div class="upload-text">📁 Click to upload or drag & drop</div>
+            <div class="upload-hint">Supported formats: DOCX, PDF, TXT (Max 50MB)</div>
+            <button onclick="document.getElementById('fileInput').click()">Choose File</button>
+        </div>
+        
+        <div class="summary-section" id="summarySection">
+            <div class="summary-box">
+                <div class="summary-title">Generated Summary</div>
+                <div class="summary-text" id="summaryText"></div>
+            </div>
+            
+            <div class="stats">
+                <div class="stat-box">
+                    <div class="stat-value" id="origLength">0</div>
+                    <div class="stat-label">Original Chars</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="summLength">0</div>
+                    <div class="stat-label">Summary Chars</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="compression">0%</div>
+                    <div class="stat-label">Compression</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Handle file selection
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = this.files[0];
+            if (file) {
+                summarizeFile(file);
+            }
+        });
+
+        // Handle drag and drop
+        const uploadSection = document.querySelector('.upload-section');
+        
+        uploadSection.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadSection.style.background = '#f0f2ff';
+        });
+        
+        uploadSection.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            uploadSection.style.background = '#f8f9fa';
+        });
+        
+        uploadSection.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadSection.style.background = '#f8f9fa';
+            const file = e.dataTransfer.files[0];
+            if (file) {
+                summarizeFile(file);
+            }
+        });
+
+        async function summarizeFile(file) {
+            const errorBox = document.getElementById('errorBox');
+            const successBox = document.getElementById('successBox');
+            const button = document.querySelector('button');
+            
+            // Reset messages
+            errorBox.classList.remove('show');
+            successBox.classList.remove('show');
+            
+            try {
+                // Step 1: Upload file to extract text
+                console.log('Step 1: Uploading file for text extraction...');
+                
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                // Use the new /api/summarize-file endpoint
+                const response = await fetch('http://localhost:5000/api/summarize-file', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Failed to process file');
+                }
+                
+                const result = await response.json();
+                
+                console.log('Step 2: File processed successfully');
+                console.log('Extracted text:', result.extracted_text.substring(0, 100) + '...');
+                console.log('Generated summary:', result.summary.substring(0, 100) + '...');
+                
+                // Display results
+                document.getElementById('summaryText').textContent = result.summary;
+                document.getElementById('origLength').textContent = result.original_length.toLocaleString();
+                document.getElementById('summLength').textContent = result.summary_length.toLocaleString();
+                document.getElementById('compression').textContent = result.compression_ratio.toFixed(2) + '%';
+                
+                document.getElementById('summarySection').classList.add('show');
+                
+                successBox.textContent = `✓ Successfully summarized "${file.name}"`;
+                successBox.classList.add('show');
+                
+            } catch (error) {
+                console.error('Error:', error);
+                errorBox.textContent = '❌ ' + error.message;
+                errorBox.classList.add('show');
+                document.getElementById('summarySection').classList.remove('show');
+            }
+        }
+    </script>
+</body>
+</html>
