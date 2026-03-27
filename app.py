@@ -9,6 +9,10 @@ from flask_cors import CORS
 import os
 import sys
 from pathlib import Path
+import threading
+import time
+import pickle
+import hashlib
 
 # Add src to path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -39,54 +43,157 @@ except ImportError:
     HAS_DOCX = False
     print("[WARN] python-docx not installed. Install with: pip install python-docx")
 
+# Model caching configuration
+MODEL_CACHE_DIR = Path('checkpoints/model_cache')
+MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+QA_SYSTEM_CACHE_FILE = MODEL_CACHE_DIR / 'qa_system_cache.pkl'
+QA_SYSTEM_LOCK = threading.Lock()
+
 # Initialize the QA System (eager loading to improve response times)
 qa_system = None
+qa_system_loading = False
+qa_system_ready = False
 
-def initialize_qa_system():
-    """Initialize QA system at startup to avoid delays on first request"""
-    global qa_system
+def _get_model_version_hash() -> str:
+    """Generate a hash of model configuration for versioning."""
+    config = "bart-large-cnn_distilbert-squad_v1"
+    return hashlib.md5(config.encode()).hexdigest()
+
+def _save_qa_system_cache(qa_sys):
+    """Save QA system to disk cache."""
+    try:
+        version_file = MODEL_CACHE_DIR / 'version.txt'
+        with open(version_file, 'w') as f:
+            f.write(_get_model_version_hash())
+        
+        # Note: Pickling large transformer models is not recommended due to size
+        # Instead, we cache the model files themselves via HuggingFace cache
+        print(f"[CACHE] Model cache directories created at {MODEL_CACHE_DIR}")
+        return True
+    except Exception as e:
+        print(f"[WARN] Failed to save cache metadata: {e}")
+        return False
+
+def _check_model_cache_valid() -> bool:
+    """Check if model cache is still valid."""
+    try:
+        version_file = MODEL_CACHE_DIR / 'version.txt'
+        if not version_file.exists():
+            return False
+        
+        with open(version_file, 'r') as f:
+            cached_version = f.read().strip()
+        
+        return cached_version == _get_model_version_hash()
+    except:
+        return False
+
+def initialize_qa_system_sync():
+    """Initialize QA system synchronously (blocking)."""
+    global qa_system, qa_system_ready
+    
     print("\n" + "="*80)
     print("[SERVER STARTUP] Initializing ML models...")
     print("This may take 1-3 minutes on first start...")
     print("="*80)
+    
     try:
         from src.model import ResearchPaperQASystem
+        start_time = time.time()
         qa_system = ResearchPaperQASystem()
-        print("✅ QA System initialized successfully at startup")
+        elapsed = time.time() - start_time
+        
+        # Cache model configuration
+        _save_qa_system_cache(qa_system)
+        qa_system_ready = True
+        
+        print(f"\n✅ QA System initialized successfully in {elapsed:.1f}s")
         print("="*80 + "\n")
         return True
     except Exception as e:
-        print(f"⚠️  Warning: QA System initialization during startup: {e}")
-        print("The system will still work but with reduced functionality")
+        print(f"\n⚠️  Warning: QA System initialization failed: {e}")
+        print("The system will load models on first use instead")
         print("="*80 + "\n")
+        import traceback
+        traceback.print_exc()
         qa_system = None
+        qa_system_ready = False
         return False
 
-def get_qa_system():
-    """Get the QA system (already loaded at startup)"""
-    global qa_system
-    if qa_system is None:
-        # Try lazy loading as fallback if startup initialization failed
+def initialize_qa_system_background():
+    """Initialize QA system in background thread (non-blocking)."""
+    global qa_system, qa_system_loading, qa_system_ready
+    
+    def _load_in_background():
+        global qa_system
+        print("\n[BACKGROUND] Starting QA System initialization in background thread...")
         try:
             from src.model import ResearchPaperQASystem
+            start_time = time.time()
             qa_system = ResearchPaperQASystem()
-            print("✅ QA System initialized via fallback lazy loading")
+            elapsed = time.time() - start_time
+            
+            _save_qa_system_cache(qa_system)
+            
+            print(f"\n[BACKGROUND] ✅ QA System ready in {elapsed:.1f}s")
+            global qa_system_ready
+            qa_system_ready = True
         except Exception as e:
-            print(f"⚠️  Warning: QA System lazy loading failed: {e}")
+            print(f"\n[BACKGROUND] ⚠️  QA System initialization failed: {e}")
             qa_system = None
+            qa_system_ready = False
+    
+    if not qa_system_loading:
+        qa_system_loading = True
+        thread = threading.Thread(target=_load_in_background, daemon=True)
+        thread.start()
+
+def get_qa_system():
+    """Get the QA system (with fallback lazy loading if needed)."""
+    global qa_system, qa_system_ready
+    
+    # If already loaded and ready, return it
+    if qa_system is not None and qa_system_ready:
+        return qa_system
+    
+    # If QA system is None and we haven't tried loading yet, try now
+    if qa_system is None:
+        with QA_SYSTEM_LOCK:
+            # Double-check after acquiring lock
+            if qa_system is None:
+                try:
+                    from src.model import ResearchPaperQASystem
+                    print("[QA_SYSTEM] Lazy loading QA system on first request...")
+                    start_time = time.time()
+                    qa_system = ResearchPaperQASystem()
+                    elapsed = time.time() - start_time
+                    qa_system_ready = True
+                    print(f"[QA_SYSTEM] ✅ Loaded in {elapsed:.1f}s")
+                except Exception as e:
+                    print(f"[QA_SYSTEM] ⚠️  Lazy loading failed: {e}")
+                    qa_system = None
+                    qa_system_ready = False
+    
     return qa_system
 
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend requests
 
-# Initialize QA system at startup (this might take 1-3 minutes)
-# Set this to False to use lazy loading instead
-EAGER_LOAD_MODELS = True
-if EAGER_LOAD_MODELS:
-    initialize_qa_system()
-else:
-    print("[INFO] QA System will be loaded on first use (lazy loading)")
+# Initialize QA system at startup
+# Options: 'sync' (blocks startup), 'background' (non-blocking), 'lazy' (on first use)
+LOAD_STRATEGY = 'background'  # Default to background loading
+
+print(f"\n[STARTUP] Using '{LOAD_STRATEGY}' model loading strategy")
+
+if LOAD_STRATEGY == 'sync':
+    print("Waiting for QA System initialization...")
+    initialize_qa_system_sync()
+elif LOAD_STRATEGY == 'background':
+    print("Starting QA System initialization in background...")
+    initialize_qa_system_background()
+else:  # 'lazy'
+    print("QA System will load on first request (lazy loading)")
 
 # Helper function to extract text from PDF
 def extract_pdf_text(filepath):
@@ -190,7 +297,41 @@ def extract_pdf_text(filepath):
         pdf_content = re.sub(r'\s+([.,!?;:])', r'\1', pdf_content)  # No space before punctuation
         pdf_content = re.sub(r'([.!?])\s{1,}([A-Z])', r'\1 \2', pdf_content)  # Single space after
         
-        # Step 9: Final cleanup
+        # Step 9: Additional aggressive patterns for remaining concatenation
+        # Handle academic terms and common research words that might stay concatenated
+        research_terms = [
+            'research', 'model', 'network', 'algorithm', 'learning', 'neural', 'data', 'analysis',
+            'method', 'approach', 'framework', 'system', 'performance', 'result', 'evaluation',
+            'training', 'testing', 'validation', 'accuracy', 'metric', 'parameter', 'optimization',
+            'implementation', 'architecture', 'layer', 'feature', 'extraction', 'classification',
+            'prediction', 'inference', 'inference', 'abstract', 'conclusion', 'introduction', 'method',
+            'experiment', 'baseline', 'benchmark', 'dataset', 'corpus', 'annotation', 'evaluation'
+        ]
+        
+        for term in research_terms:
+            # Catch patterns like "proposedmodel" -> "proposed model"
+            pattern = rf'([a-z])({term})(?=[a-z])'
+            pdf_content = re.sub(pattern, rf'\1 \2', pdf_content, flags=re.IGNORECASE)
+        
+        # Step 10: Additional pass for all-lowercase concatenated words (very aggressive)
+        # This catches "thesystemwill" -> "the system will" using word length heuristics
+        import re
+        words_to_check = pdf_content.split()
+        processed_words = []
+        
+        for word in words_to_check:
+            if len(word) > 15 and word.islower() and not any(c.isdigit() for c in word):
+                # Very long lowercase word, likely concatenated - try to split it
+                # Use a simple heuristic: common syllable patterns
+                split_word = re.sub(r'(ing|tion|ness|ment|able|ible|ful|less|ly|er|or|ar|ian)(?=[a-z])', r'\1 ', word)
+                if split_word != word:
+                    word = split_word
+            processed_words.append(word)
+        
+        pdf_content = ' '.join(processed_words)
+        
+        # Step 11: Final cleanup
+        pdf_content = re.sub(r' {2,}', ' ', pdf_content)  # Multiple spaces to single
         pdf_content = '\n'.join(line.strip() for line in pdf_content.split('\n') if line.strip())
         
         return pdf_content if pdf_content else f"[No readable content in {os.path.basename(filepath)}]"
@@ -282,7 +423,35 @@ def extract_docx_text(filepath):
         docx_content = re.sub(r'\s+([.,!?;:])', r'\1', docx_content)
         docx_content = re.sub(r'([.!?])\s{1,}([A-Z])', r'\1 \2', docx_content)
         
-        # Step 8: Final cleanup
+        # Step 8: Additional aggressive patterns for research terms
+        research_terms = [
+            'research', 'model', 'network', 'algorithm', 'learning', 'neural', 'data', 'analysis',
+            'method', 'approach', 'framework', 'system', 'performance', 'result', 'evaluation',
+            'training', 'testing', 'validation', 'accuracy', 'metric', 'parameter', 'optimization',
+            'implementation', 'architecture', 'layer', 'feature', 'extraction', 'classification',
+            'prediction', 'inference', 'abstract', 'conclusion', 'introduction', 'experiment',
+            'baseline', 'benchmark', 'dataset', 'corpus', 'annotation'
+        ]
+        
+        for term in research_terms:
+            pattern = rf'([a-z])({term})(?=[a-z])'
+            docx_content = re.sub(pattern, rf'\1 \2', docx_content, flags=re.IGNORECASE)
+        
+        # Step 9: Very long lowercase word splitting (concatenation detection)
+        words_to_check = docx_content.split()
+        processed_words = []
+        
+        for word in words_to_check:
+            if len(word) > 15 and word.islower() and not any(c.isdigit() for c in word):
+                split_word = re.sub(r'(ing|tion|ness|ment|able|ible|ful|less|ly|er|or|ar|ian)(?=[a-z])', r'\1 ', word)
+                if split_word != word:
+                    word = split_word
+            processed_words.append(word)
+        
+        docx_content = ' '.join(processed_words)
+        
+        # Step 10: Final cleanup
+        docx_content = re.sub(r' {2,}', ' ', docx_content)
         docx_content = '\n'.join(line.strip() for line in docx_content.split('\n') if line.strip())
         
         return docx_content if docx_content else f"[No readable content in {os.path.basename(filepath)}]"
@@ -468,8 +637,8 @@ def health_check():
 @app.route('/api/summarize', methods=['POST'])
 def summarize():
     """
-    Summarize research paper text
-    Expected JSON: {"text": "paper content", "max_length": 150}
+    Summarize research paper text with structured output.
+    Expected JSON: {"text": "paper content", "use_structured": true, "total_length": 1000}
     """
     try:
         data = request.get_json()
@@ -482,29 +651,51 @@ def summarize():
         if not text:
             return jsonify({'error': 'Text content cannot be empty'}), 400
         
-        max_length = data.get('max_length', 250)
+        # Check if user wants structured or simple summary
+        use_structured = data.get('use_structured', True)  # Default to structured
+        total_length = data.get('total_length', 1000)  # For structured: total tokens
+        max_length = data.get('max_length', 250)  # For simple: per-section tokens
         min_length = data.get('min_length', 100)
-        format_as_points = data.get('format_as_points', True)
         
         print(f"\n[SUMMARIZE REQUEST] Input text length: {len(text)} chars")
-        print(f"[Format] Point-form: {format_as_points}")
+        print(f"[Format] Structured: {use_structured}, Total length: {total_length}")
         
-        # Use QA system summarizer if available, otherwise use simple fallback
-        qa = get_qa_system()
-        if qa and hasattr(qa, 'summarizer'):
-            try:
-                summary = qa.summarizer.summarize(
-                    text,
-                    max_length=max_length,
-                    min_length=min_length,
-                    format_as_points=format_as_points
-                )
-            except Exception as e:
-                print(f"QA System summarizer failed, using fallback: {e}")
+        summary = None
+        
+        # Try to use structured summarizer if requested
+        if use_structured:
+            qa = get_qa_system()
+            if qa and hasattr(qa, 'structured_summarizer') and qa.structured_summarizer:
+                try:
+                    print("[SUMMARY] Using structured summarizer (Introduction, Methods, Results, Conclusion, Key Findings)")
+                    summary = qa.structured_summarizer.summarize_structured(
+                        text,
+                        total_length=total_length
+                    )
+                except Exception as e:
+                    print(f"[WARN] Structured summarizer failed: {e}, falling back to simple...")
+                    import traceback
+                    traceback.print_exc()
+                    summary = None
+        
+        # Fallback to simple summarizer if structured not available or failed
+        if summary is None:
+            qa = get_qa_system()
+            if qa and hasattr(qa, 'summarizer') and qa.summarizer:
+                try:
+                    print("[SUMMARY] Using simple summarizer (paragraph format)")
+                    summary = qa.summarizer.summarize(
+                        text,
+                        max_length=max_length,
+                        min_length=min_length,
+                        format_as_points=False  # No bullet points, full paragraphs
+                    )
+                except Exception as e:
+                    print(f"[WARN] QA System summarizer failed: {e}, using fallback...")
+                    summary = simple_summarize(text, max_length, min_length)
+            else:
+                # Use simple fallback summarizer
                 summary = simple_summarize(text, max_length, min_length)
-        else:
-            # Use simple fallback summarizer
-            summary = simple_summarize(text, max_length, min_length)
         
         # Log the summary to terminal with full details
         print("\n" + "="*80)
@@ -727,29 +918,53 @@ def summarize_file():
             }), 400
         
         # Generate summary using the extracted text
+        use_structured = request.form.get('use_structured', 'true').lower() == 'true'
+        total_length = request.form.get('total_length', 1000, type=int)
         max_length = request.form.get('max_length', 250, type=int)
         min_length = request.form.get('min_length', 100, type=int)
-        format_as_points = request.form.get('format_as_points', 'true').lower() == 'true'
         
         print(f"\n[SUMMARIZING EXTRACTED CONTENT]")
         print(f"[Content Length] {len(content)} characters")
-        print(f"[Format] Point-form: {format_as_points}")
+        print(f"[Format] Structured: {use_structured}, Total length: {total_length}")
         
         # Generate summary
+        summary = None
         qa = get_qa_system()
-        if qa and hasattr(qa, 'summarizer'):
-            try:
-                print(f"[DEBUG] Calling BART summarizer with max_length={max_length}, min_length={min_length}, format_as_points={format_as_points}")
-                summary = qa.summarizer.summarize(content, max_length=max_length, min_length=min_length, format_as_points=format_as_points)
-                print(f"[DEBUG] BART summary generated: {len(summary)} chars")
-            except Exception as e:
-                print(f"❌ QA System summarizer failed: {type(e).__name__}: {e}")
-                import traceback
-                traceback.print_exc()
+        
+        # Try structured summarizer first if requested
+        if use_structured:
+            if qa and hasattr(qa, 'structured_summarizer') and qa.structured_summarizer:
+                try:
+                    print(f"[SUMMARY] Using structured summarizer...")
+                    summary = qa.structured_summarizer.summarize_structured(
+                        content,
+                        total_length=total_length
+                    )
+                except Exception as e:
+                    print(f"[WARN] Structured summarizer failed: {type(e).__name__}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    summary = None
+        
+        # Fallback to simple summarizer
+        if summary is None:
+            if qa and hasattr(qa, 'summarizer') and qa.summarizer:
+                try:
+                    print(f"[SUMMARY] Using fallback simple summarizer...")
+                    summary = qa.summarizer.summarize(
+                        content,
+                        max_length=max_length,
+                        min_length=min_length,
+                        format_as_points=False
+                    )
+                except Exception as e:
+                    print(f"[WARN] QA System summarizer failed: {type(e).__name__}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    summary = simple_summarize(content, max_length, min_length)
+            else:
+                print(f"[DEBUG] QA system not available, using fallback")
                 summary = simple_summarize(content, max_length, min_length)
-        else:
-            print(f"[DEBUG] QA system not available, using fallback")
-            summary = simple_summarize(content, max_length, min_length)
         
         # Log the summary
         print("\n" + "="*80)

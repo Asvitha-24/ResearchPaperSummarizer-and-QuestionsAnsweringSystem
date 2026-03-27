@@ -364,6 +364,230 @@ class SemanticSearcher:
         return results
 
 
+class StructuredSummarizer:
+    """
+    Generates structured summaries of research papers organized by sections:
+    Introduction, Methods, Results, Conclusion, Key Findings (all in paragraph form).
+    """
+    
+    def __init__(self, model_name: str = "facebook/bart-large-cnn"):
+        """Initialize the structured summarizer with BART model."""
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model_name = model_name
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+        self.model.to(self.device)
+        self.model.eval()
+        print(f"[OK] Structured Summarizer loaded: {model_name}")
+    
+    def _segment_text_into_sections(self, text: str) -> Dict[str, str]:
+        """
+        Attempt to segment text into sections: Introduction, Methods, Results, Conclusion.
+        If sections don't exist explicitly, creates them from content chunks.
+        """
+        import re
+        
+        sections = {
+            'introduction': '',
+            'methods': '',
+            'results': '',
+            'conclusion': '',
+            'general': ''
+        }
+        
+        # Common section headers in research papers
+        section_patterns = {
+            'introduction': r'(introduction|background|motivation|overview)',
+            'methods': r'(method|approach|methodology|technical approach|system design)',
+            'results': r'(results?|findings?|evaluation|experiments?|experimental results)',
+            'conclusion': r'(conclusion|future work|discussion|implications)'
+        }
+        
+        # Try to find explicit sections
+        current_section = 'general'
+        lines = text.split('\n')
+        section_lines = {k: [] for k in sections.keys()}
+        
+        for line in lines:
+            # Check if this line starts a new section
+            found_section = False
+            for section_name, pattern in section_patterns.items():
+                if re.search(pattern, line.lower()) and len(line.split()) < 10:  # Section headers are usually short
+                    current_section = section_name
+                    found_section = True
+                    break
+            
+            if not found_section and line.strip():
+                section_lines[current_section].append(line)
+        
+        # Join sections
+        for section, lines_list in section_lines.items():
+            sections[section] = '\n'.join(lines_list).strip()
+        
+        # If sections are mostly empty, segment by logical chunks instead
+        if not sections['introduction'] and not sections['methods']:
+            # Divide text into roughly equal parts
+            paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+            
+            if len(paragraphs) > 0:
+                # Distribute paragraphs across sections
+                intro_end = max(1, len(paragraphs) // 5)
+                method_end = max(intro_end + 1, (len(paragraphs) * 2) // 5)
+                result_end = max(method_end + 1, (len(paragraphs) * 4) // 5)
+                
+                sections['introduction'] = '\n\n'.join(paragraphs[:intro_end])
+                sections['methods'] = '\n\n'.join(paragraphs[intro_end:method_end])
+                sections['results'] = '\n\n'.join(paragraphs[method_end:result_end])
+                sections['conclusion'] = '\n\n'.join(paragraphs[result_end:])
+        
+        return sections
+    
+    def _summarize_section(self, text: str, max_length: int = 150) -> str:
+        """Summarize a single section using BART."""
+        if not text or len(text.split()) < 20:
+            return text[:500] if text else ""
+        
+        try:
+            inputs = self.tokenizer(text, max_length=1024, truncation=True, return_tensors="pt")
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            
+            with torch.no_grad():
+                summary_ids = self.model.generate(
+                    **inputs,
+                    max_length=max_length,
+                    min_length=int(max_length * 0.4),
+                    length_penalty=1.2,
+                    num_beams=5,
+                    early_stopping=True,
+                    temperature=0.8,
+                )
+            
+            summary = self.tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+            return self._fix_spacing(summary)
+        except Exception as e:
+            print(f"[ERROR] Section summarization failed: {e}")
+            return text[:max_length]
+    
+    def _fix_spacing(self, text: str) -> str:
+        """Fix spacing issues in generated text."""
+        import re
+        
+        text = re.sub(r'\.([A-Z])', r'. \1', text)
+        text = re.sub(r'([!?])([A-Z])', r'\1 \2', text)
+        text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
+        text = re.sub(r' {2,}', ' ', text)
+        text = re.sub(r' ([,.!?;:])', r'\1', text)
+        
+        return text.strip()
+    
+    def _extract_key_findings(self, results_section: str, conclusion_section: str) -> str:
+        """Extract key findings from results and conclusion sections."""
+        import re
+        
+        # Combine results and conclusion
+        combined = results_section + ' ' + conclusion_section
+        
+        # Summarize combined text
+        if len(combined.split()) < 30:
+            return combined
+        
+        try:
+            inputs = self.tokenizer(combined, max_length=1024, truncation=True, return_tensors="pt")
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            
+            with torch.no_grad():
+                summary_ids = self.model.generate(
+                    **inputs,
+                    max_length=120,
+                    min_length=40,
+                    length_penalty=1.1,
+                    num_beams=4,
+                    early_stopping=True,
+                )
+            
+            findings = self.tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+            return self._fix_spacing(findings)
+        except Exception as e:
+            print(f"[ERROR] Key findings extraction failed: {e}")
+            return combined[:300]
+    
+    def summarize_structured(self, 
+                            text: str,
+                            total_length: int = 1000) -> str:
+        """
+        Generate a structured summary with sections as paragraphs.
+        
+        Args:
+            text: Full research paper text
+            total_length: Target total summary length in tokens
+            
+        Returns:
+            Formatted structured summary
+        """
+        # Allocate tokens per section (rough estimate)
+        section_tokens = int(total_length / 5)  # 5 main sections
+        
+        # Segment text
+        sections = self._segment_text_into_sections(text)
+        
+        # Summarize each section
+        summaries = {}
+        for section_name in ['introduction', 'methods', 'results', 'conclusion']:
+            if sections[section_name]:
+                print(f"[SUMMARY] Summarizing {section_name} section...")
+                summaries[section_name] = self._summarize_section(
+                    sections[section_name],
+                    max_length=section_tokens
+                )
+            else:
+                summaries[section_name] = ""
+        
+        # Extract key findings
+        key_findings = ""
+        if sections['results'] or sections['conclusion']:
+            print("[SUMMARY] Extracting key findings...")
+            key_findings = self._extract_key_findings(
+                sections['results'],
+                sections['conclusion']
+            )
+        
+        # Format as structured summary (paragraph form, NOT bullet points)
+        formatted_summary = self._format_structured_output(summaries, key_findings)
+        
+        return formatted_summary
+    
+    def _format_structured_output(self, summaries: Dict[str, str], key_findings: str) -> str:
+        """Format summaries into structured paragraph form."""
+        import re
+        
+        output_parts = []
+        
+        # Add sections with proper headers
+        if summaries.get('introduction'):
+            output_parts.append(f"**Introduction**\n\n{summaries['introduction']}\n")
+        
+        if summaries.get('methods'):
+            output_parts.append(f"**Methods**\n\n{summaries['methods']}\n")
+        
+        if summaries.get('results'):
+            output_parts.append(f"**Results**\n\n{summaries['results']}\n")
+        
+        if summaries.get('conclusion'):
+            output_parts.append(f"**Conclusion**\n\n{summaries['conclusion']}\n")
+        
+        if key_findings:
+            output_parts.append(f"**Key Findings**\n\n{key_findings}\n")
+        
+        # Join with clear separation
+        full_summary = '\n---\n\n'.join(output_parts)
+        
+        # Ensure proper paragraph spacing
+        full_summary = re.sub(r'\n{3,}', '\n\n', full_summary)
+        
+        return full_summary.strip()
+
+
+
 class ResearchPaperQASystem:
     """Complete QA system for research papers combining all components."""
     
@@ -386,6 +610,14 @@ class ResearchPaperQASystem:
         except Exception as e:
             print(f"[ERROR] Failed to initialize summarizer: {e}")
             self.summarizer = None
+        
+        # Initialize structured summarizer (new)
+        try:
+            self.structured_summarizer = StructuredSummarizer(summarization_model)
+            print("[OK] Structured Summarizer initialized")
+        except Exception as e:
+            print(f"[ERROR] Failed to initialize structured summarizer: {e}")
+            self.structured_summarizer = None
         
         # Initialize QA model (optional)
         try:
