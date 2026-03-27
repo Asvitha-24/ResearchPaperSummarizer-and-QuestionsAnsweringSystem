@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Research Paper Q&A</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 32px;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 16px;
+        }
+        
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .section-title {
+            color: #667eea;
+            font-weight: 600;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 1px;
+        }
+        
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 14px;
+            resize: vertical;
+            margin-bottom: 12px;
+        }
+        
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            margin-bottom: 12px;
+        }
+        
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        button:hover:not(:disabled) {
+            background: #764ba2;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .error {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            color: #856404;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .error.show {
+            display: block;
+        }
+        
+        .success {
+            background: #d4edda;
+            border: 1px solid #28a745;
+            color: #155724;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .success.show {
+            display: block;
+        }
+        
+        .loading {
+            color: #667eea;
+            font-weight: 600;
+            display: none;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .loading.show {
+            display: flex;
+        }
+        
+        .spinner {
+            width: 16px;
+            height: 16px;
+            border: 3px solid rgba(102, 126, 234, 0.3);
+            border-radius: 50%;
+            border-top-color: #667eea;
+            animation: spin 0.8s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .answer-section {
+            margin-top: 30px;
+            display: none;
+        }
+        
+        .answer-section.show {
+            display: block;
+        }
+        
+        .answer-box {
+            background: #e8f5e9;
+            border-left: 4px solid #4caf50;
+            padding: 20px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+        
+        .answer-label {
+            color: #2e7d32;
+            font-weight: 600;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 1px;
+        }
+        
+        .answer-text {
+            color: #333;
+            line-height: 1.6;
+            font-size: 15px;
+        }
+        
+        .confidence-section {
+            margin-top: 15px;
+        }
+        
+        .confidence-label {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        .confidence-bar {
+            width: 100%;
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        .confidence-fill {
+            height: 100%;
+            background: #4caf50;
+            transition: width 0.3s ease;
+        }
+        
+        .debug-info {
+            background: #f5f5f5;
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+            font-family: monospace;
+            font-size: 12px;
+            color: #666;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📚 Research Paper Q&A System</h1>
+        <p class="subtitle">Ask questions about your documents and get instant answers</p>
+        
+        <div id="errorBox" class="error"></div>
+        <div id="successBox" class="success"></div>
+        
+        <!-- Context Input -->
+        <div class="section">
+            <div class="section-title">📋 Step 1: Paste Document Text</div>
+            <textarea 
+                id="contextTextarea"
+                placeholder="Paste your research paper text here... (Make sure to include enough context for the model to find answers)"
+                rows="6"
+            ></textarea>
+            <small style="color: #999;">Tip: The more context you provide, the better the answers will be.</small>
+        </div>
+        
+        <!-- Question Input -->
+        <div class="section">
+            <div class="section-title">❓ Step 2: Ask Your Question</div>
+            <input 
+                type="text"
+                id="questionInput"
+                placeholder="What would you like to know about the document?"
+            />
+        </div>
+        
+        <!-- Ask Button -->
+        <button id="askButton" onclick="askQuestion()">
+            Ask Question
+        </button>
+        
+        <div id="loadingIndicator" class="loading">
+            <span class="spinner"></span>
+            <span>Processing your question...</span>
+        </div>
+        
+        <!-- Answer Display -->
+        <div id="answerSection" class="answer-section">
+            <div class="answer-box">
+                <div class="answer-label">✅ Answer</div>
+                <div id="answerText" class="answer-text"></div>
+                
+                <div class="confidence-section">
+                    <div class="confidence-label">
+                        <span>Confidence Level</span>
+                        <span id="confidencePercent">0%</span>
+                    </div>
+                    <div class="confidence-bar">
+                        <div id="confidenceFill" class="confidence-fill" style="width: 0%"></div>
+                    </div>
+                    <small style="color: #666; margin-top: 5px; display: block;">
+                        Score: <span id="scoreValue">0</span> | Status: <span id="statusValue">-</span>
+                    </small>
+                </div>
+                
+                <div class="debug-info">
+                    <strong>Debug Information:</strong><br>
+                    <div id="debugInfo"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function askQuestion() {
+            const context = document.getElementById('contextTextarea').value.trim();
+            const question = document.getElementById('questionInput').value.trim();
+            const errorBox = document.getElementById('errorBox');
+            const successBox = document.getElementById('successBox');
+            const answerSection = document.getElementById('answerSection');
+            const loadingIndicator = document.getElementById('loadingIndicator');
+            const askButton = document.getElementById('askButton');
+            
+            // Clear previous messages
+            errorBox.textContent = '';
+            errorBox.classList.remove('show');
+            successBox.textContent = '';
+            successBox.classList.remove('show');
+            answerSection.classList.remove('show');
+            
+            // Validation
+            if (!context) {
+                errorBox.textContent = '❌ Please paste document text';
+                errorBox.classList.add('show');
+                return;
+            }
+            
+            if (!question) {
+                errorBox.textContent = '❌ Please enter a question';
+                errorBox.classList.add('show');
+                return;
+            }
+            
+            try {
+                // Show loading state
+                loadingIndicator.classList.add('show');
+                askButton.disabled = true;
+                
+                console.log('📤 Sending question to backend...');
+                console.log('Question:', question);
+                console.log('Context length:', context.length);
+                
+                // Make API call to backend
+                const response = await fetch('http://localhost:5000/api/answer', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        question: question,
+                        context: context
+                    })
+                });
+                
+                console.log('Response status:', response.status);
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || errorData.message || 'Failed to get answer');
+                }
+                
+                const result = await response.json();
+                
+                console.log('✅ Got response from backend');
+                console.log('Full result:', result);
+                
+                // Check if successful
+                if (!result.success) {
+                    throw new Error(result.error || 'Response indicates failure');
+                }
+                
+                // Display answer
+                const answerText = result.answer || result.full_result?.answer || 'No answer found';
+                const score = result.score || result.full_result?.score || 0;
+                const confidence = result.confidence || (score > 0.5 ? 'high' : 'low');
+                
+                document.getElementById('answerText').textContent = answerText;
+                document.getElementById('confidencePercent').textContent = (score * 100).toFixed(1) + '%';
+                document.getElementById('confidenceFill').style.width = (score * 100) + '%';
+                document.getElementById('scoreValue').textContent = score.toFixed(4);
+                document.getElementById('statusValue').textContent = confidence;
+                
+                // Show debug info
+                const debugInfo = `
+Question: "${question}"<br>
+Context Length: ${context.length} chars<br>
+Answer: "${answerText.substring(0, 50)}${answerText.length > 50 ? '...' : ''}"<br>
+Score: ${score.toFixed(4)}<br>
+Confidence: ${confidence}<br>
+Timestamp: ${new Date().toLocaleTimeString()}
+                `;
+                document.getElementById('debugInfo').innerHTML = debugInfo;
+                
+                answerSection.classList.add('show');
+                successBox.textContent = '✓ Successfully retrieved answer';
+                successBox.classList.add('show');
+                
+            } catch (error) {
+                console.error('❌ Error:', error);
+                errorBox.textContent = '❌ Error: ' + error.message;
+                errorBox.classList.add('show');
+                
+                // Show debug info even on error
+                const debugInfo = `
+Error: ${error.message}<br>
+Question: "${question}"<br>
+Context Length: ${context.length} chars<br>
+Timestamp: ${new Date().toLocaleTimeString()}<br>
+Check browser console for more details
+                `;
+                document.getElementById('debugInfo').innerHTML = debugInfo;
+                document.getElementById('answerSection').classList.add('show');
+                
+            } finally {
+                loadingIndicator.classList.remove('show');
+                askButton.disabled = false;
+            }
+        }
+        
+        // Allow Enter key in question input
+        document.getElementById('questionInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                askQuestion();
+            }
+        });
+        
+        // Log page load
+        window.addEventListener('load', () => {
+            console.log('✅ Q&A Interface loaded');
+            console.log('Backend URL: http://localhost:5000/api/answer');
+        });
+    </script>
+</body>
+</html>

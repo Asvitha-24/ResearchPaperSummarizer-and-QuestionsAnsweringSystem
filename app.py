@@ -39,9 +39,54 @@ except ImportError:
     HAS_DOCX = False
     print("[WARN] python-docx not installed. Install with: pip install python-docx")
 
+# Initialize the QA System (eager loading to improve response times)
+qa_system = None
+
+def initialize_qa_system():
+    """Initialize QA system at startup to avoid delays on first request"""
+    global qa_system
+    print("\n" + "="*80)
+    print("[SERVER STARTUP] Initializing ML models...")
+    print("This may take 1-3 minutes on first start...")
+    print("="*80)
+    try:
+        from src.model import ResearchPaperQASystem
+        qa_system = ResearchPaperQASystem()
+        print("✅ QA System initialized successfully at startup")
+        print("="*80 + "\n")
+        return True
+    except Exception as e:
+        print(f"⚠️  Warning: QA System initialization during startup: {e}")
+        print("The system will still work but with reduced functionality")
+        print("="*80 + "\n")
+        qa_system = None
+        return False
+
+def get_qa_system():
+    """Get the QA system (already loaded at startup)"""
+    global qa_system
+    if qa_system is None:
+        # Try lazy loading as fallback if startup initialization failed
+        try:
+            from src.model import ResearchPaperQASystem
+            qa_system = ResearchPaperQASystem()
+            print("✅ QA System initialized via fallback lazy loading")
+        except Exception as e:
+            print(f"⚠️  Warning: QA System lazy loading failed: {e}")
+            qa_system = None
+    return qa_system
+
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend requests
+
+# Initialize QA system at startup (this might take 1-3 minutes)
+# Set this to False to use lazy loading instead
+EAGER_LOAD_MODELS = True
+if EAGER_LOAD_MODELS:
+    initialize_qa_system()
+else:
+    print("[INFO] QA System will be loaded on first use (lazy loading)")
 
 # Helper function to extract text from PDF
 def extract_pdf_text(filepath):
@@ -246,22 +291,6 @@ def extract_docx_text(filepath):
         print(f"DOCX extraction error: {e}")
         return f"[Error extracting DOCX: {str(e)}]"
 
-# Initialize the QA System (lazy loading to avoid slow transformers import)
-qa_system = None
-
-def get_qa_system():
-    """Lazily load and return the QA system on first use"""
-    global qa_system
-    if qa_system is None:
-        try:
-            from src.model import ResearchPaperQASystem
-            qa_system = ResearchPaperQASystem()
-            print("✅ QA System initialized successfully")
-        except Exception as e:
-            print(f"⚠️  Warning: QA System initialization: {e}")
-            qa_system = None
-    return qa_system
-
 # Enhanced extractive summarizer as fallback
 def simple_summarize(text, max_length=2000, min_length=700):
     """Enhanced extractive summarization generating comprehensive, meaningful abstracts"""
@@ -453,10 +482,12 @@ def summarize():
         if not text:
             return jsonify({'error': 'Text content cannot be empty'}), 400
         
-        max_length = data.get('max_length', 2000)  # Increased for comprehensive abstracts
-        min_length = data.get('min_length', 700)  # Increased for detailed summaries
+        max_length = data.get('max_length', 250)
+        min_length = data.get('min_length', 100)
+        format_as_points = data.get('format_as_points', True)
         
         print(f"\n[SUMMARIZE REQUEST] Input text length: {len(text)} chars")
+        print(f"[Format] Point-form: {format_as_points}")
         
         # Use QA system summarizer if available, otherwise use simple fallback
         qa = get_qa_system()
@@ -465,7 +496,8 @@ def summarize():
                 summary = qa.summarizer.summarize(
                     text,
                     max_length=max_length,
-                    min_length=min_length
+                    min_length=min_length,
+                    format_as_points=format_as_points
                 )
             except Exception as e:
                 print(f"QA System summarizer failed, using fallback: {e}")
@@ -504,26 +536,53 @@ def answer_question():
     """
     try:
         qa = get_qa_system()
-        if not qa:
-            return jsonify({'error': 'QA System not initialized'}), 500
+        if not qa or not qa.qa_model:
+            print("[API] QA System not ready")
+            # Try to respond with a fallback
+            return jsonify({
+                'success': False,
+                'error': 'QA System not initialized. Please ensure the system is properly loaded.',
+                'message': 'The QA model is still loading. Please try again in a few seconds.'
+            }), 503
         
         data = request.get_json()
-        if not data or 'question' not in data or 'context' not in data:
-            return jsonify({'error': 'Missing required fields: question, context'}), 400
+        if not data:
+            return jsonify({'error': 'No JSON data provided'}), 400
+            
+        question = data.get('question', '').strip()
+        context = data.get('context', '').strip()
         
-        question = data['question']
-        context = data['context']
+        # Validate inputs
+        if not question:
+            return jsonify({'error': 'Question cannot be empty'}), 400
+        if not context:
+            return jsonify({'error': 'Context cannot be empty'}), 400
         
-        answer = qa.qa_model.answer_question(question, context)
+        print(f"\n[API /answer] Processing question: '{question[:50]}...'")
+        print(f"[API /answer] Context length: {len(context)} characters")
+        
+        # Get answer from QA model
+        result = qa.qa_model.answer_question(question, context)
+        
+        print(f"[API /answer] Answer received: {result.get('answer', 'N/A')[:100]}")
         
         return jsonify({
             'success': True,
             'question': question,
-            'answer': answer
+            'answer': result.get('answer', 'No answer found'),
+            'score': float(result.get('score', 0.0)),
+            'confidence': 'high' if result.get('score', 0.0) > 0.5 else 'low',
+            'full_result': result
         }), 200
     
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"[ERROR] /api/answer endpoint error: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'error': 'Internal server error',
+            'message': str(e)
+        }), 500
 
 
 # ==================== SEMANTIC SEARCH ====================
@@ -668,18 +727,20 @@ def summarize_file():
             }), 400
         
         # Generate summary using the extracted text
-        max_length = request.form.get('max_length', 400, type=int)
+        max_length = request.form.get('max_length', 250, type=int)
         min_length = request.form.get('min_length', 100, type=int)
+        format_as_points = request.form.get('format_as_points', 'true').lower() == 'true'
         
         print(f"\n[SUMMARIZING EXTRACTED CONTENT]")
         print(f"[Content Length] {len(content)} characters")
+        print(f"[Format] Point-form: {format_as_points}")
         
         # Generate summary
         qa = get_qa_system()
         if qa and hasattr(qa, 'summarizer'):
             try:
-                print(f"[DEBUG] Calling BART summarizer with max_length={max_length}, min_length={min_length}")
-                summary = qa.summarizer.summarize(content, max_length=max_length, min_length=min_length)
+                print(f"[DEBUG] Calling BART summarizer with max_length={max_length}, min_length={min_length}, format_as_points={format_as_points}")
+                summary = qa.summarizer.summarize(content, max_length=max_length, min_length=min_length, format_as_points=format_as_points)
                 print(f"[DEBUG] BART summary generated: {len(summary)} chars")
             except Exception as e:
                 print(f"❌ QA System summarizer failed: {type(e).__name__}: {e}")
@@ -736,4 +797,4 @@ if __name__ == '__main__':
     print("🚀 Starting Research Paper QA System API Server...")
     print("📍 Server running at: http://localhost:5000")
     print("📚 API Documentation available at: http://localhost:5000/api/health")
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)

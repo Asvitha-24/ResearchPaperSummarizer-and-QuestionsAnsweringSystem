@@ -46,18 +46,20 @@ class SummarizationModel:
     
     def summarize(self, 
                   text: str,
-                  max_length: int = 150,
-                  min_length: int = 50) -> str:
+                  max_length: int = 250,
+                  min_length: int = 100,
+                  format_as_points: bool = True) -> str:
         """
-        Generate summary of input text.
+        Generate summary of input text with improved formatting.
         
         Args:
             text: Text to summarize
-            max_length: Maximum summary length in tokens
+            max_length: Maximum summary length in tokens (increased for longer summaries)
             min_length: Minimum summary length in tokens
+            format_as_points: Whether to format output as bullet points
             
         Returns:
-            Generated summary
+            Generated summary formatted as points/notes
         """
         if not text or len(text.split()) < 50:
             return text
@@ -71,23 +73,82 @@ class SummarizationModel:
             inputs = self.tokenizer(text, max_length=1024, truncation=True, return_tensors="pt")
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
             
-            # Generate summary
+            # Generate longer summary with better parameters
             summary_ids = self.model.generate(
                 **inputs,
                 max_length=max_length,
                 min_length=min_length,
-                length_penalty=2.0,
-                num_beams=4,
-                early_stopping=True
+                length_penalty=1.5,  # Reduced from 2.0 to allow longer output
+                num_beams=5,  # Increased from 4 for better quality
+                early_stopping=True,
+                temperature=0.8,  # Add temperature for better diversity
             )
             
             # Decode summary
             summary = self.tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+            
+            # Fix spacing issues (ensure proper space between words)
+            summary = self._fix_spacing(summary)
+            
+            # Format as bullet points if requested
+            if format_as_points:
+                summary = self._format_as_points(summary)
+            
             return summary
             
         except Exception as e:
             print(f"[ERROR] Error in summarization: {e}")
             return text[:500]
+    
+    def _fix_spacing(self, text: str) -> str:
+        """Fix spacing issues in text - handles periods without spaces, concatenated words, etc."""
+        import re
+        
+        # Fix missing spaces after periods followed by capital letters (e.g., "word.Next" -> "word. Next")
+        text = re.sub(r'\.([A-Z])', r'. \1', text)
+        
+        # Fix other punctuation marks followed directly by capital letters
+        text = re.sub(r'([!?])([A-Z])', r'\1 \2', text)
+        
+        # Fix missing spaces between lowercase and uppercase (CamelCase)
+        text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
+        
+        # Fix multiple spaces
+        text = re.sub(r' {2,}', ' ', text)
+        
+        # Fix spaces before punctuation (standard English rules)
+        text = re.sub(r' ([,.!?;:])', r'\1', text)
+        
+        return text.strip()
+    
+    def _format_as_points(self, text: str) -> str:
+        """Format summary as bullet points for better readability"""
+        import re
+        
+        # Split by sentence endings
+        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        if not sentences:
+            return text
+        
+        # Group into main points (2-3 sentences per point)
+        points = []
+        current_point = []
+        
+        for i, sentence in enumerate(sentences):
+            current_point.append(sentence)
+            
+            # Form a point every 2-3 sentences or at end
+            if len(current_point) >= 2 or i == len(sentences) - 1:
+                point = ' '.join(current_point)
+                # Capitalize if needed
+                if point and not point[0].isupper():
+                    point = point[0].upper() + point[1:]
+                points.append(f"• {point}")
+                current_point = []
+        
+        return '\n'.join(points) if points else text
     
     def batch_summarize(self,
                        texts: List[str],
@@ -133,7 +194,7 @@ class QuestionAnsweringModel:
     def answer_question(self,
                        question: str,
                        context: str,
-                       confidence_threshold: float = 0.0) -> Dict:
+                       confidence_threshold: float = 0.1) -> Dict:
         """
         Answer a question given context.
         
@@ -146,6 +207,7 @@ class QuestionAnsweringModel:
             Dictionary with answer, score, and span info
         """
         if not context or not question:
+            print("[QA] Missing context or question")
             return {
                 'answer': 'No answer found',
                 'score': 0.0,
@@ -154,28 +216,73 @@ class QuestionAnsweringModel:
             }
         
         try:
+            # Split context into chunks if too long (max ~512 tokens for BERT)
+            # Each token ~= 1-1.3 words, so limit to ~400 words per chunk
+            max_chunk_length = 2000  # characters
+            
+            print(f"[QA] Processing question: '{question}'")
+            print(f"[QA] Context length: {len(context)} characters")
+            
+            # If context is too long, try to find relevant sentences first
+            if len(context) > max_chunk_length:
+                # Split by sentences and find relevant ones
+                import re
+                sentences = re.split(r'[.!?]+', context)
+                sentences = [s.strip() for s in sentences if s.strip()]
+                
+                print(f"[QA] Context too long, split into {len(sentences)} sentences")
+                
+                # Score each sentence based on question similarity (simple keyword matching)
+                question_words = set(question.lower().split())
+                scored_sentences = []
+                for idx, sent in enumerate(sentences):
+                    sent_words = set(sent.lower().split())
+                    overlap = len(question_words & sent_words)
+                    scored_sentences.append((idx, sent, overlap))
+                
+                # Sort by relevance and take top sentences
+                scored_sentences.sort(key=lambda x: x[2], reverse=True)
+                relevant_context = ' '.join([sent for _, sent, _ in scored_sentences[:5]])
+                
+                print(f"[QA] Using {len(relevant_context)} chars of relevant context")
+            else:
+                relevant_context = context
+            
+            # Truncate if still too long
+            if len(relevant_context) > max_chunk_length:
+                relevant_context = relevant_context[:max_chunk_length]
+                print(f"[QA] Truncated to {len(relevant_context)} characters")
+            
             result = self.pipeline(
                 question=question,
-                context=context,
+                context=relevant_context,
                 top_k=1
             )
+            
+            print(f"[QA] Got result with score: {result[0]['score']:.4f}")
+            print(f"[QA] Answer: {result[0]['answer']}")
             
             if result[0]['score'] >= confidence_threshold:
                 return result[0]
             else:
+                print(f"[QA] Score below threshold ({result[0]['score']:.4f} < {confidence_threshold})")
                 return {
-                    'answer': 'Low confidence answer',
+                    'answer': result[0]['answer'],  # Still return the answer even if low confidence
                     'score': result[0]['score'],
-                    'start': -1,
-                    'end': -1
+                    'start': result[0].get('start', -1),
+                    'end': result[0].get('end', -1),
+                    'confidence': 'low'
                 }
         except Exception as e:
-            print(f"Error in QA: {e}")
+            print(f"[ERROR] Error in QA processing: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
             return {
-                'answer': 'Error processing question',
+                'answer': 'Unable to process - please try a different question or provide more context',
                 'score': 0.0,
                 'start': -1,
-                'end': -1
+                'end': -1,
+                'error': str(e)
             }
     
     def batch_answer(self,
