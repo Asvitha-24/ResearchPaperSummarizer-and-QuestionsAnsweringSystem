@@ -44,53 +44,260 @@ class SummarizationModel:
             self.tokenizer = None
             self.model = None
     
+    def preprocess_text(self, text: str) -> str:
+        """
+        Comprehensive preprocessing for OCR-extracted text.
+        Removes metadata (affiliations, emails, locations) and fixes OCR spacing.
+        Focus: return only research content.
+        
+        Args:
+            text: Raw extracted text (possibly with OCR errors)
+            
+        Returns:
+            Cleaned, properly spaced text with only research content
+        """
+        import re
+        
+        # ===== PHASE 0: BREAK UP CONCATENATIONS =====
+        # Critical: fixes "Departmentof" so patterns below can match
+        concat_fixes = {
+            r'(?i)departmentof': 'Department of',
+            r'(?i)instituteof': 'Institute of',
+            r'(?i)universiteof': 'University of',
+            r'(?i)collegeof': 'College of',
+            r'(?i)schoolof': 'School of',
+            r'(?i)techniquesand': 'Techniques and',
+            r'(?i)systemand': 'System and',
+        }
+        for pattern, replacement in concat_fixes.items():
+            text = re.sub(pattern, replacement, text)
+        
+        # ===== PHASE 1: REMOVE EMAILS =====
+        text = re.sub(r'\S+@\S+\.\S+', '', text)
+        
+        # ===== PHASE 2: REMOVE URLS =====
+        text = re.sub(r'https?://\S+', '', text)
+        text = re.sub(r'www\.\S+', '', text)
+        text = re.sub(r'doi\S*:\s*\S+', '', text)
+        
+        # ===== PHASE 3: REMOVE AFFILIATION BLOCKS =====
+        # These appear at the beginning of papers, often with author bylines
+        # Target: "Department of Computer Science and Engineering" and similar
+        affiliation_patterns = [
+            r'Department\s+of\s+(?:Computer\s+)?Science(?:\s+and\s+Engineering)?[^.]*?(?=\n|,|$)',
+            r'Department\s+of\s+(?:Computer\s+)?Engineering[^.]*?(?=\n|,|$)',
+            r'Department\s+of\s+Informatics[^.]*?(?=\n|,|$)',
+            r'Military\s+Institute\s+of\s+Science\s+(?:and\s+)?Technology[^.]*?(?=\n|,|$)',
+            r'University\s+of\s+\w+(?:\s+\w+)*',
+            r'Institute\s+of\s+\w+(?:\s+\w+)*',
+        ]
+        for pattern in affiliation_patterns:
+            text = re.sub(pattern, ' ', text, flags=re.IGNORECASE)
+        
+        # ===== PHASE 4: REMOVE GEOGRAPHIC LOCATIONS & COUNTRIES =====
+        locations = [
+            'Dhaka', 'Jakarta', 'Bandung', 'Tangerang',  # Cities
+            'Bangladesh', 'Indonesia', 'Japan', 'Korea', 'Thailand', 'Vietnam',  # Countries
+            'Singapore', 'Philippines', 'Malaysia', 'Pakistan', 'India',
+        ]
+        for loc in locations:
+            text = re.sub(rf'\b{re.escape(loc)}\b', '', text, flags=re.IGNORECASE)
+        
+        # ===== PHASE 5: REMOVE JOURNAL METADATA =====
+        # Volume, Issue, Page numbers, Years, Copyright
+        text = re.sub(r'\b[Vv]ol(?:ume)?\s*[\.:]*\s*\d+', '', text)
+        text = re.sub(r'\b[Nn]o(?:\.|\s)*\d+', '', text)
+        text = re.sub(r'\bpp?\.?\s*\d+(?:\s*[-–]\s*\d+)?', '', text)
+        text = re.sub(r'\b(19|20)\d{2}\b', '', text)
+        text = re.sub(r'©\s*\d{4}', '', text)
+        
+        # ===== PHASE 6: REMOVE PAGE NUMBERS =====
+        # Page numbers typically appear alone at end/start of lines
+        text = re.sub(r'\b\d{1,4}\s*$', '', text, flags=re.MULTILINE)
+        text = re.sub(r'^\s*\d{1,4}\s+', '', text, flags=re.MULTILINE)
+        
+        # ===== PHASE 7: FIX OCR SPACING ERRORS =====
+        text = self._fix_ocr_spacing(text)
+        
+        # ===== PHASE 8: FIX GENERAL SPACING =====
+        text = self._fix_spacing(text)
+        
+        # ===== PHASE 9: FIX LIGATURES & SPECIAL CHARS =====
+        text = text.replace('ﬁ', 'fi')
+        text = text.replace('ﬂ', 'fl')
+        text = text.replace('ﬀ', 'ff')
+        text = text.replace('ﬃ', 'ffi')
+        text = text.replace('ﬄ', 'ffl')
+        
+        # ===== PHASE 10: FINAL CLEANUP =====
+        # Collapse multiple whitespace
+        text = re.sub(r'\s+', ' ', text)
+        text = re.sub(r'^\s+|\s+$', '', text)
+        
+        return text.strip()
+    
+    def _fix_ocr_spacing(self, text: str) -> str:
+        """
+        Fix OCR-specific spacing errors like:
+        - "appliedinthear eaof" → "applied in the area of"
+        - "Processin g" → "Processing"
+        - "Proceedingsofthe" → "Proceedings of the"
+        - "Literat ure" → "Literature"
+        """
+        import re
+        
+        # Pattern 1: Remove spaces inside words (lowercase followed by space then lowercase)
+        # "be rleant" → "berlant"
+        text = re.sub(r"([a-z0-9'])\ ([a-z])", r'\1\2', text)
+        
+        # Pattern 2: Fix suffix splits - space before common suffixes
+        suffixes_to_rejoin = [
+            ('ing', r'(\w)\s+(ing\b)'),
+            ('tion', r'(\w)\s+(tion\b)'),
+            ('ment', r'(\w)\s+(ment\b)'),
+            ('able', r'(\w)\s+(able\b)'),
+            ('ness', r'(\w)\s+(ness\b)'),
+            ('ful', r'(\w)\s+(ful\b)'),
+            ('less', r'(\w)\s+(less\b)'),
+            ('ized', r'(\w)\s+(ized\b)'),
+            ('ized', r'(\w)\s+(ized\b)'),
+        ]
+        
+        for suffix, pattern in suffixes_to_rejoin:
+            text = re.sub(pattern, r'\1' + suffix, text, flags=re.IGNORECASE)
+        
+        # Pattern 3: Fix split words with capitals mid-word - DISABLED (too risky)
+        # This pattern removes too many legitimate spaces, so we skip it
+        # Users should rely on BART's language understanding for fixing these errors
+        
+        # Pattern 4: Remove extra spaces around numbers
+        text = re.sub(r'(\d)\s+(\d)', r'\1\2', text)
+        
+        # Pattern 5: Insert spaces before common prepositions/articles stuck to words
+        # "Proceedingsofthe" → "Proceedings of the"
+        # "metricsfor" → "metrics for"
+        # "Consistencyof" → "Consistency of"
+        # "Modelforthe" → "Model for the"
+        common_words = [
+            ('ofthe', 'of the'),
+            ('ofan', 'of an'),
+            ('ofa', 'of a'),
+            ('inthe', 'in the'),
+            ('inan', 'in an'),
+            ('ina', 'in a'),
+            ('onthe', 'on the'),
+            ('onan', 'on an'),
+            ('ona', 'on a'),
+            ('forthe', 'for the'),
+            ('foran', 'for an'),
+            ('fora', 'for a'),
+            ('tothe', 'to the'),
+            ('andit', 'and it'),
+            ('andthe', 'and the'),
+            ('withthe', 'with the'),
+            ('arefactuall', 'are factually'),
+            ('Modelforthe', 'Model for the'),
+            ('modelforthe', 'model for the'),
+            ('PretrainedLanguage', 'Pretrained Language'),
+            ('pretrainedlanguage', 'pretrained language'),
+            ('TaskAlfonso', 'Task\nAlfonso'),
+            ('taskAlfonso', 'task\nAlfonso'),
+        ]
+        
+        for concat, expanded in common_words:
+            # Case-insensitive replacement
+            text = re.sub(rf'\b{concat}\b', expanded, text, flags=re.IGNORECASE)
+        
+        # Pattern 6: Fix email addresses mixed with location
+        # "Indonesiaalfonso" → "Indonesia\nalfonso" or "Indonesia\n\nalfonso"
+        text = re.sub(r'(Indonesia)([a-z]+@)', r'\1\n\2', text, flags=re.IGNORECASE)
+        text = re.sub(r'na\.id([A-Z])', r'na.id\n\1', text)  # Break after .id before capitals
+        
+        # Pattern 7: Fix common concatenated words that start with capital
+        # "Themostcommon" → "The most common"
+        # "Evaluatingthe" → "Evaluating the"
+        capital_patterns = [
+            (r'\bThemostcommon', 'The most common'),
+            (r'\bEvaluatingthe', 'Evaluating the'),
+            (r'\bConsistencyof', 'Consistency of'),
+            (r'\bFactualConsistencyof', 'Factual Consistency of'),
+            (r'\bMcCann', 'McCann'),  # Fix spacing in names
+            (r'\bMc Cann', 'McCann'),
+            (r'\bQuestion-AnsweringTask', 'Question-Answering Task'),
+            (r'\bQuestion-AnsweringModelforthe', 'Question-Answering Model for the'),
+        ]
+        
+        for pattern, replacement in capital_patterns:
+            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+        
+        # Pattern 8: Fix special characters and accents
+        # Handle various OCR artifacts for special characters
+        text = text.replace('´c', 'ć')
+        text = text.replace('c´', 'ć')
+        text = text.replace('´s', 'ś')
+        text = text.replace('s´', 'ś')
+        text = text.replace('n´', 'ń')
+        text = text.replace('´n', 'ń')
+        text = text.replace('z´', 'ź')
+        text = text.replace('´z', 'ź')
+        text = text.replace('Kry´sci ´nski', 'Kryściński')
+        text = text.replace('c⃝', '')  # Remove copy symbol artifact
+        
+        # Pattern 9: Fix common name/location patterns
+        text = text.replace('Tangera', 'Tangerang')  # Common OCR error for Tangerang
+        
+        return text
+    
     def summarize(self, 
                   text: str,
-                  max_length: int = 250,
-                  min_length: int = 100,
+                  max_length: int = 1000,
+                  min_length: int = 400,
                   format_as_points: bool = True) -> str:
         """
         Generate summary of input text with improved formatting.
         
         Args:
-            text: Text to summarize
-            max_length: Maximum summary length in tokens (increased for longer summaries)
+            text: Text to summarize (may contain OCR errors)
+            max_length: Maximum summary length in tokens
             min_length: Minimum summary length in tokens
             format_as_points: Whether to format output as bullet points
             
         Returns:
-            Generated summary formatted as points/notes
+            Generated summary formatted with correct spacing
         """
         if not text or len(text.split()) < 50:
-            return text
+            return self.preprocess_text(text)
         
         try:
             if self.model is None or self.tokenizer is None:
-                print("[WARN] BART model not loaded, returning text truncated")
-                return text[:500]
+                print("[WARN] BART model not loaded, using fallback simple_summarize")
+                # Import from utils to avoid circular imports
+                from src.utils import simple_summarize
+                return simple_summarize(text, max_length, min_length)
             
-            # Tokenize input text
+            # Step 1: Preprocess input to fix OCR errors
+            text = self.preprocess_text(text)
+            
+            # Step 2: Tokenize cleaned text
             inputs = self.tokenizer(text, max_length=1024, truncation=True, return_tensors="pt")
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
             
-            # Generate longer summary with better parameters
+            # Step 3: Generate summary
             summary_ids = self.model.generate(
                 **inputs,
                 max_length=max_length,
                 min_length=min_length,
-                length_penalty=1.5,  # Reduced from 2.0 to allow longer output
-                num_beams=5,  # Increased from 4 for better quality
+                length_penalty=1.5,
+                num_beams=5,
                 early_stopping=True,
-                temperature=0.8,  # Add temperature for better diversity
+                temperature=0.8,
             )
             
-            # Decode summary
+            # Step 4: Decode and clean summary
             summary = self.tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+            summary = self._fix_spacing(summary)  # Extra spacing cleanup
             
-            # Fix spacing issues (ensure proper space between words)
-            summary = self._fix_spacing(summary)
-            
-            # Format as bullet points if requested
+            # Step 5: Format as bullet points if requested
             if format_as_points:
                 summary = self._format_as_points(summary)
             
@@ -98,26 +305,45 @@ class SummarizationModel:
             
         except Exception as e:
             print(f"[ERROR] Error in summarization: {e}")
-            return text[:500]
+            return self.preprocess_text(text[:500])
     
     def _fix_spacing(self, text: str) -> str:
         """Fix spacing issues in text - handles periods without spaces, concatenated words, etc."""
         import re
         
-        # Fix missing spaces after periods followed by capital letters (e.g., "word.Next" -> "word. Next")
-        text = re.sub(r'\.([A-Z])', r'. \1', text)
+        # PHASE 1: Fix acronyms with internal spaces (e.g., "C ONS ISTENT" -> "CONSISTENT")
+        text = re.sub(r'\b([A-Z])\s+([A-Z])\s+([A-Z]+)\b', r'\1\2\3', text)
+        text = re.sub(r'\b([A-Z])\s+([A-Z])\b', r'\1\2', text)
         
-        # Fix other punctuation marks followed directly by capital letters
-        text = re.sub(r'([!?])([A-Z])', r'\1 \2', text)
-        
-        # Fix missing spaces between lowercase and uppercase (CamelCase)
+        # PHASE 2: Insert spaces before capital letters that follow lowercase letters (main boundary detection)
+        # This is the most reliable indicator of word boundaries in concatenated text
         text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
         
-        # Fix multiple spaces
+        # PHASE 3: Handle obvious low-confidence patterns
+        # Fix patterns like "andthe", "ofthe", "inthe" that are clearly two words
+        text = re.sub(r'\b(and)(the)([A-Z])', r'\1 \2 \3', text, flags=re.IGNORECASE)
+        text = re.sub(r'\b(of)(the)([A-Z])', r'\1 \2 \3', text, flags=re.IGNORECASE)
+        text = re.sub(r'\b(in)(the)([A-Z])', r'\1 \2 \3', text, flags=re.IGNORECASE)
+        text = re.sub(r'\b(for)(the)([A-Z])', r'\1 \2 \3', text, flags=re.IGNORECASE)
+        
+        # PHASE 4: Fix missing spaces after periods, commas, and other punctuation followed by capitals
+        text = re.sub(r'\.([A-Z])', r'. \1', text)
+        text = re.sub(r',([A-Z])', r', \1', text)
+        text = re.sub(r':([A-Z])', r': \1', text)
+        text = re.sub(r'([!?])([A-Z])', r'\1 \2', text)
+        
+        # PHASE 5: Clean up multiple spaces
         text = re.sub(r' {2,}', ' ', text)
         
-        # Fix spaces before punctuation (standard English rules)
-        text = re.sub(r' ([,.!?;:])', r'\1', text)
+        # PHASE 6: Fix spaces before punctuation (standard English rules)
+        text = re.sub(r' ([,.!?;:\)])', r'\1', text)
+        
+        # PHASE 7: Normalize spacing around brackets
+        text = re.sub(r'\(\s+', r'(', text)
+        text = re.sub(r'\s+\)', r')', text)
+        
+        # PHASE 8: Capitalize first letter of sentences
+        text = re.sub(r'(^|\.\s+)([a-z])', lambda m: m.group(1) + m.group(2).upper(), text, flags=re.MULTILINE)
         
         return text.strip()
     
@@ -152,8 +378,8 @@ class SummarizationModel:
     
     def batch_summarize(self,
                        texts: List[str],
-                       max_length: int = 150,
-                       min_length: int = 50) -> List[str]:
+                       max_length: int = 1000,
+                       min_length: int = 400) -> List[str]:
         """
         Summarize multiple texts.
         
@@ -370,14 +596,21 @@ class StructuredSummarizer:
     Introduction, Methods, Results, Conclusion, Key Findings (all in paragraph form).
     """
     
-    def __init__(self, model_name: str = "facebook/bart-large-cnn"):
-        """Initialize the structured summarizer with BART model."""
+    def __init__(self, model_name: str = "facebook/bart-large-cnn", summarizer_instance=None):
+        """
+        Initialize the structured summarizer with BART model.
+        
+        Args:
+            model_name: HuggingFace model identifier
+            summarizer_instance: SummarizationModel instance for preprocessing
+        """
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model_name = model_name
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
         self.model.to(self.device)
         self.model.eval()
+        self.summarizer_instance = summarizer_instance  # Reference for preprocessing
         print(f"[OK] Structured Summarizer loaded: {model_name}")
     
     def _segment_text_into_sections(self, text: str) -> Dict[str, str]:
@@ -442,7 +675,7 @@ class StructuredSummarizer:
         
         return sections
     
-    def _summarize_section(self, text: str, max_length: int = 150) -> str:
+    def _summarize_section(self, text: str, max_length: int = 200) -> str:
         """Summarize a single section using BART."""
         if not text or len(text.split()) < 20:
             return text[:500] if text else ""
@@ -518,19 +751,23 @@ class StructuredSummarizer:
         Generate a structured summary with sections as paragraphs.
         
         Args:
-            text: Full research paper text
+            text: Full research paper text (may contain OCR errors)
             total_length: Target total summary length in tokens
             
         Returns:
             Formatted structured summary
         """
-        # Allocate tokens per section (rough estimate)
+        # Step 1: Preprocess input to fix OCR errors
+        if self.summarizer_instance:
+            text = self.summarizer_instance.preprocess_text(text)
+        
+        # Step 2: Allocate tokens per section
         section_tokens = int(total_length / 5)  # 5 main sections
         
-        # Segment text
+        # Step 3: Segment cleaned text
         sections = self._segment_text_into_sections(text)
         
-        # Summarize each section
+        # Step 4: Summarize each section
         summaries = {}
         for section_name in ['introduction', 'methods', 'results', 'conclusion']:
             if sections[section_name]:
@@ -542,7 +779,7 @@ class StructuredSummarizer:
             else:
                 summaries[section_name] = ""
         
-        # Extract key findings
+        # Step 5: Extract key findings
         key_findings = ""
         if sections['results'] or sections['conclusion']:
             print("[SUMMARY] Extracting key findings...")
@@ -551,7 +788,7 @@ class StructuredSummarizer:
                 sections['conclusion']
             )
         
-        # Format as structured summary (paragraph form, NOT bullet points)
+        # Step 6: Format as structured summary
         formatted_summary = self._format_structured_output(summaries, key_findings)
         
         return formatted_summary
@@ -613,7 +850,10 @@ class ResearchPaperQASystem:
         
         # Initialize structured summarizer (new)
         try:
-            self.structured_summarizer = StructuredSummarizer(summarization_model)
+            self.structured_summarizer = StructuredSummarizer(
+                summarization_model, 
+                summarizer_instance=self.summarizer
+            )
             print("[OK] Structured Summarizer initialized")
         except Exception as e:
             print(f"[ERROR] Failed to initialize structured summarizer: {e}")

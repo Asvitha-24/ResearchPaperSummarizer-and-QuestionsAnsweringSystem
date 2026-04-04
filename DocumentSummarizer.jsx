@@ -69,10 +69,17 @@ export function DocumentSummarizer() {
       setStats({
         originalLength: result.original_length,
         summaryLength: result.summary_length,
-        compressionRatio: result.compression_ratio
+        compressionRatio: result.compression_ratio,
+        textTruncated: result.extracted_text_truncated || false,
+        fullTextLength: result.extracted_text_full_length
       });
 
-      setSuccess(`✓ Successfully summarized "${file.name}"`);
+      // Show appropriate success message
+      if (result.extracted_text_truncated) {
+        setSuccess(`✓ Successfully summarized "${file.name}" (showing first 5000 chars of ${result.extracted_text_full_length} total)`);
+      } else {
+        setSuccess(`✓ Successfully summarized "${file.name}"`);
+      }
 
     } catch (err) {
       console.error('❌ Error:', err);

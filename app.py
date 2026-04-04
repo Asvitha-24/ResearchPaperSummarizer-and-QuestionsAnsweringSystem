@@ -460,165 +460,7 @@ def extract_docx_text(filepath):
         print(f"DOCX extraction error: {e}")
         return f"[Error extracting DOCX: {str(e)}]"
 
-# Enhanced extractive summarizer as fallback
-def simple_summarize(text, max_length=2000, min_length=700):
-    """Enhanced extractive summarization generating comprehensive, meaningful abstracts"""
-    import re
-    
-    # First, clean up the text more carefully - fix OCR artifacts without breaking normal words
-    text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)  # Only insert space between camelCase
-    text = re.sub(r'(\w)\s{2,}(?=[a-z])', r'\1', text)  # Fix broken words (internal spaces only)
-    text = re.sub(r' {2,}', ' ', text)  # Multiple spaces to single
-    text = re.sub(r'(\w)\n(?=[a-z])', r'\1 ', text)  # Join broken words across lines
-    
-    # Split by sentence endings
-    sentences = re.split(r'[.!?]+', text)
-    sentences = [re.sub(r' {2,}', ' ', s.strip()) for s in sentences if s.strip()]
-    
-    if not sentences:
-        return text[:max_length] if len(text) > 0 else "No content to summarize"
-    
-    if len(sentences) == 1:
-        return sentences[0][:max_length]
-    
-    # Filter out incomplete/fragmented sentences - be strict about quality
-    valid_sentences = []
-    for s in sentences:
-        words = s.split()
-        
-        # Skip very short sentences
-        if len(words) < 6:
-            continue
-        
-        alpha_words = [w for w in words if any(c.isalpha() for c in w)]
-        
-        # Must have good alphabetic content (not metadata/numbers)
-        if len(alpha_words) < len(words) * 0.65:
-            continue
-        
-        special_ratio = sum(1 for c in s if c in '->:*[]()') / len(s)
-        if special_ratio >= 0.20:
-            continue
-        
-        valid_sentences.append(s)
-    
-    # If filtering removed too much, be more lenient
-    if len(valid_sentences) < 4:
-        valid_sentences = [s for s in sentences if len(s.split()) >= 6]
-    
-    if not valid_sentences:
-        valid_sentences = sentences
-    
-    # Expanded stopwords list
-    stopwords = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
-                 'of', 'is', 'was', 'are', 'be', 'by', 'this', 'that', 'with', 'as',
-                 'from', 'into', 'up', 'about', 'which', 'who', 'it', 'its', 'they', 'them',
-                 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should',
-                 'may', 'might', 'can', 'must', 'shall', 'these', 'those', 'been', 'being',
-                 'such', 'no', 'not', 'only', 'just', 'also', 'all', 'each', 'every', 'we', 'us',
-                 'our', 'you', 'your', 'he', 'him', 'her', 'his', 'she', 'hers', 'any', 'i', 'me',
-                 'than', 'then', 'same', 'other', 'through', 'during', 'before', 'after', 'above',
-                 'below', 'through', 'among', 'between', 'including', 'where', 'when', 'what', 'why', 'how'}
-    
-    # Calculate word frequencies from valid content - focus on content words
-    all_words = re.findall(r'\w+', ' '.join(valid_sentences).lower())
-    word_freq = {}
-    for word in all_words:
-        if len(word) > 2 and word not in stopwords:
-            word_freq[word] = word_freq.get(word, 0) + 1
-    
-    # Identify main themes (most frequent significant words) - top 20 for better coverage
-    main_themes = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:20]
-    theme_words = set(word for word, _ in main_themes)
-    theme_importance = dict(main_themes)
-    
-    # Score sentences based on multiple comprehensive factors
-    sentence_scores = {}
-    for idx, sentence in enumerate(valid_sentences):
-        sentence_words = re.findall(r'\w+', sentence.lower())
-        
-        # Factor 1: Theme word presence with importance weighting
-        theme_score = 0
-        for word in sentence_words:
-            if word in theme_words:
-                theme_score += theme_importance.get(word, 0)
-        theme_score = theme_score / max(len(sentence_words), 1)
-        
-        # Factor 2: Average word frequency (how important are the words used)
-        if sentence_words:
-            freq_score = sum(word_freq.get(word, 0) for word in sentence_words) / len(sentence_words)
-        else:
-            freq_score = 0
-        
-        # Factor 3: Sentence position (spread across document for diverse coverage)
-        normalized_pos = idx / max(len(valid_sentences) - 1, 1)
-        if normalized_pos < 0.2:  # First 20%
-            position_score = 0.95
-        elif normalized_pos < 0.7:  # Middle 50%
-            position_score = 1.0
-        else:  # Last 30%
-            position_score = 0.8
-        
-        # Factor 4: Sentence length preference (reject too short, prefer substantial sentences)
-        sent_length = len(sentence_words)
-        if 8 <= sent_length <= 40:
-            length_score = 1.0
-        elif 5 <= sent_length < 8:
-            length_score = 0.5
-        elif sent_length > 40:
-            length_score = 0.9
-        else:
-            length_score = 0.2
-        
-        # Factor 5: Keyword density (sentences with more unique meaningful terms)
-        unique_keywords = [w for w in set(sentence_words) if word_freq.get(w, 0) > 0 and len(w) > 3]
-        keyword_score = len(unique_keywords) / max(len(set(sentence_words)), 1)
-        
-        # Factor 6: Content density - how packed with meaningful terms
-        content_words = [w for w in sentence_words if w not in stopwords and len(w) > 2]
-        content_density = len(content_words) / max(len(sentence_words), 1)
-        
-        # Combined weighted score - emphasize theme and frequency for coherent abstracts
-        total_score = (theme_score * 0.32) + (freq_score * 0.28) + (keyword_score * 0.18) + (position_score * 0.12) + (length_score * 0.05) + (content_density * 0.05)
-        sentence_scores[idx] = total_score
-    
-    # Calculate target number of sentences for comprehensive summary
-    avg_sentence_length = sum(len(s.split()) for s in valid_sentences) / len(valid_sentences) if valid_sentences else 15
-    num_sentences = max(8, int(max_length / avg_sentence_length))  # Minimum 8 sentences for comprehensive abstract
-    num_sentences = min(num_sentences, len(valid_sentences))
-    
-    # Ensure we get a diverse selection covering the document
-    sorted_scores = sorted(sentence_scores.items(), key=lambda x: x[1], reverse=True)
-    selected_indices = sorted([idx for idx, _ in sorted_scores[:num_sentences]])
-    summary_sentences = [valid_sentences[i] for i in selected_indices]
-    
-    # Build summary with proper formatting (space joining for natural flow)
-    summary = ' '.join(summary_sentences)
-    
-    # Ensure proper punctuation
-    if summary and not summary.endswith('.'):
-        summary += '.'
-    
-    # Truncate if needed while preserving sentence structure
-    if len(summary) > max_length:
-        summary = summary[:max_length]
-        # Remove partial sentence at end
-        if '.' in summary:
-            summary = summary[:summary.rfind('.')+1]
-    
-    # Extend if too short - fill with next best sentences
-    if len(summary) < min_length and len(selected_indices) < len(valid_sentences):
-        remaining = sorted([idx for idx in range(len(valid_sentences)) if idx not in selected_indices],
-                          key=lambda idx: sentence_scores.get(idx, 0), reverse=True)
-        for idx in remaining:
-            if len(summary) < min_length:
-                summary += ' ' + valid_sentences[idx]
-                if not summary.endswith('.'):
-                    summary += '.'
-            else:
-                break
-    
-    return summary if summary else "Unable to generate summary from content"
+
 
 
 # ==================== HEALTH CHECK ====================
@@ -653,9 +495,9 @@ def summarize():
         
         # Check if user wants structured or simple summary
         use_structured = data.get('use_structured', True)  # Default to structured
-        total_length = data.get('total_length', 1000)  # For structured: total tokens
-        max_length = data.get('max_length', 250)  # For simple: per-section tokens
-        min_length = data.get('min_length', 100)
+        total_length = data.get('total_length', 5000)  # For structured: total tokens
+        max_length = data.get('max_length', 1000)  # For simple: per-section tokens
+        min_length = data.get('min_length', 400)
         
         print(f"\n[SUMMARIZE REQUEST] Input text length: {len(text)} chars")
         print(f"[Format] Structured: {use_structured}, Total length: {total_length}")
@@ -919,9 +761,9 @@ def summarize_file():
         
         # Generate summary using the extracted text
         use_structured = request.form.get('use_structured', 'true').lower() == 'true'
-        total_length = request.form.get('total_length', 1000, type=int)
-        max_length = request.form.get('max_length', 250, type=int)
-        min_length = request.form.get('min_length', 100, type=int)
+        total_length = request.form.get('total_length', 5000, type=int)
+        max_length = request.form.get('max_length', 1000, type=int)
+        min_length = request.form.get('min_length', 400, type=int)
         
         print(f"\n[SUMMARIZING EXTRACTED CONTENT]")
         print(f"[Content Length] {len(content)} characters")
@@ -931,13 +773,26 @@ def summarize_file():
         summary = None
         qa = get_qa_system()
         
+        # PREPROCESSING: Clean the extracted content before summarization
+        # This removes author affiliations, emails, locations, etc.
+        preprocessed_content = content
+        if qa and hasattr(qa, 'summarizer') and qa.summarizer:
+            print(f"[PREPROCESSING] Cleaning extracted text before summarization...")
+            try:
+                preprocessed_content = qa.summarizer.preprocess_text(content)
+                print(f"[PREPROCESSING] Done! Reduced from {len(content)} to {len(preprocessed_content)} chars")
+            except Exception as e:
+                print(f"[WARN] Preprocessing failed: {e}, using raw content")
+                preprocessed_content = content
+        
         # Try structured summarizer first if requested
         if use_structured:
             if qa and hasattr(qa, 'structured_summarizer') and qa.structured_summarizer:
                 try:
                     print(f"[SUMMARY] Using structured summarizer...")
+                    # Use preprocessed content for summarization
                     summary = qa.structured_summarizer.summarize_structured(
-                        content,
+                        preprocessed_content,
                         total_length=total_length
                     )
                 except Exception as e:
@@ -951,8 +806,9 @@ def summarize_file():
             if qa and hasattr(qa, 'summarizer') and qa.summarizer:
                 try:
                     print(f"[SUMMARY] Using fallback simple summarizer...")
+                    # Use preprocessed content
                     summary = qa.summarizer.summarize(
-                        content,
+                        preprocessed_content,
                         max_length=max_length,
                         min_length=min_length,
                         format_as_points=False
@@ -961,10 +817,10 @@ def summarize_file():
                     print(f"[WARN] QA System summarizer failed: {type(e).__name__}: {e}")
                     import traceback
                     traceback.print_exc()
-                    summary = simple_summarize(content, max_length, min_length)
+                    summary = simple_summarize(preprocessed_content, max_length, min_length)
             else:
                 print(f"[DEBUG] QA system not available, using fallback")
-                summary = simple_summarize(content, max_length, min_length)
+                summary = simple_summarize(preprocessed_content, max_length, min_length)
         
         # Log the summary
         print("\n" + "="*80)
@@ -981,15 +837,24 @@ def summarize_file():
         except:
             pass
         
+        # IMPORTANT: Return PREPROCESSED extracted_text to remove metadata from frontend display
+        # This ensures users see clean content without author affiliations, emails, etc.
+        extracted_preview = preprocessed_content[:5000] if len(preprocessed_content) > 5000 else preprocessed_content
+        
         return jsonify({
             'success': True,
             'filename': file.filename,
             'file_type': file_ext,
-            'extracted_text': content,
+            'extracted_text': extracted_preview,  # CLEANED/PREPROCESSED text, not raw
+            'extracted_text_truncated': len(preprocessed_content) > 5000,
+            'extracted_text_full_length': len(preprocessed_content),
             'summary': summary,
-            'original_length': len(content),
+            'original_length': len(content),  # Original RAW length
+            'preprocessed_length': len(preprocessed_content),  # Length after cleaning
             'summary_length': len(summary),
-            'compression_ratio': round((len(summary) / len(content)) * 100, 2) if len(content) > 0 else 0
+            'compression_ratio': round((len(summary) / len(preprocessed_content)) * 100, 2) if len(preprocessed_content) > 0 else 0,
+            'preprocessing_applied': True,
+            'metadata_removed_chars': len(content) - len(preprocessed_content)
         }), 200
     
     except Exception as e:

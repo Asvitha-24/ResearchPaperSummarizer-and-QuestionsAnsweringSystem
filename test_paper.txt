@@ -1,0 +1,34 @@
+Automated Literature Review Using NLP Techniquesand LLM-Based Retrieval-Augmented Generation
+
+Nurshat Fateh Ali
+Departmentof Computer Scienceand Engineering
+Military Instituteof Scienceand Technology
+Dhaka, Bangladesh
+nurshatfateh@gmail.com
+
+Shakil Mosharrof
+Departmentof Computer Scienceand Engineering
+Military Instituteof Scienceand Technology
+Dhaka, Bangladesh
+shakilmrf@gmail.com
+
+Md. Mahdi Mohtasim
+Departmentof Computer Scienceand Engineering
+Military Instituteof Scienceand Technology
+Dhaka, Bangladesh
+mohtasim@gmail.com
+
+Abstract
+This paper presents a comprehensive literature review on automated systems for scientific literature analysis. The study examines recent advances in natural language processing and large language models applied to research paper summarization and retrieval tasks. We focus on RAG systems that combine dense and sparse retrieval methods with transformer-based language models. Our findings show that state-of-the-art approaches achieve significant improvements in both relevance and coherence metrics.
+
+Introduction
+The exponential growth of scientific publications has created a critical need for automated systems that can efficiently process and synthesize large volumes of literature. This paper surveys recent developments in NLP techniques and LLM-based architectures that enable scalable solutions for literature analysis. We identify key trends in retrieval augmented generation and discuss their implications for future research.
+
+Methods
+We conducted a systematic review of peer-reviewed literature published between 2020-2024. Our search strategy included major academic databases and preprint repositories. We identified 487 relevant papers through initial screening and selected 156 papers for detailed analysis based on inclusion criteria. Papers were assessed for methodological quality and relevance to RAG systems.
+
+Results
+Our analysis identifies several key findings. First, transformer-based models consistently outperform traditional methods by 15-30% on benchmark datasets. Second, hybrid retrieval approaches combining BM25 and dense retrievers show superior effectiveness. Third, fine-tuning on domain-specific data improves performance on specialized tasks. We also find that recent models like GPT-4 and Claude show exceptional generalization capabilities.
+
+Conclusion
+This review demonstrates the significant progress in automated literature analysis through NLP and LLM techniques. Future research should focus on improving interpretability, reducing computational costs, and developing more sophisticated retrieval strategies. The integration of RAG systems into domain-specific applications shows particular promise for accelerating scientific discovery.
