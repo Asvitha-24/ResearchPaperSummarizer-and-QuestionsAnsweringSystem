@@ -410,12 +410,30 @@ class QuestionAnsweringModel:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model_name = model_name
         
-        # Load QA pipeline
-        self.pipeline = pipeline(
-            "question-answering",
-            model=model_name,
-            device=0 if torch.cuda.is_available() else -1
-        )
+        # Load tokenizer and model for direct use (modern API)
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.model = AutoModelForQuestionAnswering.from_pretrained(model_name)
+            self.model.to(self.device)
+            self.model.eval()
+            print(f"[OK] QA Model loaded: {model_name}")
+        except Exception as e:
+            print(f"[ERROR] Failed to load QA model: {e}")
+            # Fallback to pipeline if direct loading fails
+            try:
+                self.pipeline = pipeline(
+                    "question-answering",
+                    model=model_name,
+                    device=0 if torch.cuda.is_available() else -1
+                )
+                self.tokenizer = None
+                self.model = None
+                print(f"[WARN] Using fallback pipeline for QA")
+            except Exception as e2:
+                print(f"[ERROR] Failed to load QA pipeline: {e2}")
+                self.pipeline = None
+                self.tokenizer = None
+                self.model = None
     
     def answer_question(self,
                        question: str,
@@ -479,26 +497,20 @@ class QuestionAnsweringModel:
                 relevant_context = relevant_context[:max_chunk_length]
                 print(f"[QA] Truncated to {len(relevant_context)} characters")
             
-            result = self.pipeline(
-                question=question,
-                context=relevant_context,
-                top_k=1
-            )
-            
-            print(f"[QA] Got result with score: {result[0]['score']:.4f}")
-            print(f"[QA] Answer: {result[0]['answer']}")
-            
-            if result[0]['score'] >= confidence_threshold:
-                return result[0]
+            # Try direct model first if available
+            if self.model is not None and self.tokenizer is not None:
+                return self._answer_with_model(question, relevant_context, confidence_threshold)
+            elif hasattr(self, 'pipeline') and self.pipeline is not None:
+                return self._answer_with_pipeline(question, relevant_context, confidence_threshold)
             else:
-                print(f"[QA] Score below threshold ({result[0]['score']:.4f} < {confidence_threshold})")
+                print("[ERROR] No QA model or pipeline available")
                 return {
-                    'answer': result[0]['answer'],  # Still return the answer even if low confidence
-                    'score': result[0]['score'],
-                    'start': result[0].get('start', -1),
-                    'end': result[0].get('end', -1),
-                    'confidence': 'low'
+                    'answer': 'QA model not available',
+                    'score': 0.0,
+                    'start': -1,
+                    'end': -1
                 }
+            
         except Exception as e:
             print(f"[ERROR] Error in QA processing: {type(e).__name__}: {e}")
             import traceback
@@ -509,6 +521,89 @@ class QuestionAnsweringModel:
                 'start': -1,
                 'end': -1,
                 'error': str(e)
+            }
+    
+    def _answer_with_model(self, question: str, context: str, confidence_threshold: float) -> Dict:
+        """Answer using direct model inference with modern tokenizer API."""
+        # Use the modern tokenizer call syntax (no encode_plus)
+        inputs = self.tokenizer(
+            question,
+            context,
+            add_special_tokens=True,
+            return_tensors="pt",
+            max_length=512,
+            truncation="only_second",
+            padding="max_length"
+        )
+        
+        # Move inputs to device
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        
+        print(f"[QA] Using direct model inference")
+        
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+        
+        # Get start and end logits
+        start_logits = outputs.start_logits[0]
+        end_logits = outputs.end_logits[0]
+        
+        # Get the best answer span
+        start_idx = torch.argmax(start_logits)
+        end_idx = torch.argmax(end_logits) + 1
+        
+        # Ensure end_idx > start_idx
+        if end_idx <= start_idx:
+            end_idx = start_idx + 1
+        
+        # Decode the answer
+        input_ids = inputs["input_ids"][0]
+        answer_ids = input_ids[start_idx:end_idx]
+        answer = self.tokenizer.decode(answer_ids, skip_special_tokens=True)
+        
+        # Calculate confidence score
+        start_score = torch.softmax(start_logits, dim=0)[start_idx].item()
+        end_score = torch.softmax(end_logits, dim=0)[end_idx - 1].item()
+        score = (start_score + end_score) / 2
+        
+        print(f"[QA] Got result with score: {score:.4f}")
+        print(f"[QA] Answer: {answer}")
+        
+        result = {
+            'answer': answer if answer.strip() else 'No answer found',
+            'score': float(score),
+            'start': int(start_idx),
+            'end': int(end_idx)
+        }
+        
+        if score >= confidence_threshold:
+            return result
+        else:
+            print(f"[QA] Score below threshold ({score:.4f} < {confidence_threshold})")
+            result['confidence'] = 'low'
+            return result
+    
+    def _answer_with_pipeline(self, question: str, context: str, confidence_threshold: float) -> Dict:
+        """Answer using the HuggingFace pipeline as fallback."""
+        result = self.pipeline(
+            question=question,
+            context=context,
+            top_k=1
+        )
+        
+        print(f"[QA] Got result with score: {result[0]['score']:.4f}")
+        print(f"[QA] Answer: {result[0]['answer']}")
+        
+        if result[0]['score'] >= confidence_threshold:
+            return result[0]
+        else:
+            print(f"[QA] Score below threshold ({result[0]['score']:.4f} < {confidence_threshold})")
+            return {
+                'answer': result[0]['answer'],
+                'score': result[0]['score'],
+                'start': result[0].get('start', -1),
+                'end': result[0].get('end', -1),
+                'confidence': 'low'
             }
     
     def batch_answer(self,
