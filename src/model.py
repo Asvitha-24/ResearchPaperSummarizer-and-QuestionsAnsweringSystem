@@ -14,7 +14,6 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     AutoModelForQuestionAnswering
 )
-from sentence_transformers import SentenceTransformer
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -625,64 +624,6 @@ class QuestionAnsweringModel:
         return answers
 
 
-class SemanticSearcher:
-    """Handles semantic search for document retrieval in QA."""
-    
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
-        """
-        Initialize semantic search model.
-        
-        Args:
-            model_name: SentenceTransformer model identifier
-        """
-        self.model = SentenceTransformer(model_name)
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = self.model.to(self.device)
-        self.embeddings = None
-        self.documents = None
-    
-    def index_documents(self, documents: List[str]) -> None:
-        """
-        Create embeddings for documents.
-        
-        Args:
-            documents: List of documents to index
-        """
-        self.documents = documents
-        self.embeddings = self.model.encode(
-            documents,
-            convert_to_tensor=True,
-            show_progress_bar=True
-        )
-    
-    def search(self, query: str, top_k: int = 5) -> List[Tuple[str, float]]:
-        """
-        Search for most relevant documents.
-        
-        Args:
-            query: Search query
-            top_k: Number of top results to return
-            
-        Returns:
-            List of tuples (document, similarity_score)
-        """
-        if self.embeddings is None:
-            raise ValueError("Documents not indexed. Call index_documents first.")
-        
-        query_embedding = self.model.encode(query, convert_to_tensor=True)
-        
-        # Calculate cosine similarities
-        from sentence_transformers.util import pytorch_cos_sim
-        cos_scores = pytorch_cos_sim(query_embedding, self.embeddings)[0]
-        
-        # Get top-k results
-        top_results = torch.topk(cos_scores, k=min(top_k, len(self.documents)))
-        
-        results = []
-        for score, idx in zip(top_results.values, top_results.indices):
-            results.append((self.documents[idx], score.item()))
-        
-        return results
 
 
 class StructuredSummarizer:
@@ -925,15 +866,13 @@ class ResearchPaperQASystem:
     
     def __init__(self,
                  summarization_model: str = "facebook/bart-large-cnn",
-                 qa_model: str = "distilbert-base-uncased-distilled-squad",
-                 search_model: str = "all-MiniLM-L6-v2"):
+                 qa_model: str = "distilbert-base-uncased-distilled-squad"):
         """
         Initialize complete QA system.
         
         Args:
             summarization_model: Model for summarization
             qa_model: Model for question answering
-            search_model: Model for semantic search
         """
         # Initialize summarizer (required)
         try:
@@ -961,26 +900,6 @@ class ResearchPaperQASystem:
         except Exception as e:
             print(f"[WARN] Failed to initialize QA model (optional): {e}")
             self.qa_model = None
-        
-        # Initialize searcher (optional)
-        try:
-            self.searcher = SemanticSearcher(search_model)
-            print("[OK] Semantic searcher initialized")
-        except Exception as e:
-            print(f"[WARN] Failed to initialize semantic searcher (optional): {e}")
-            self.searcher = None
-        
-        self.indexed_papers = {}
-    
-    def index_papers(self, papers_data: Dict[str, str]) -> None:
-        """
-        Index research papers for retrieval.
-        
-        Args:
-            papers_data: Dictionary of {paper_id: paper_text}
-        """
-        self.indexed_papers = papers_data
-        self.searcher.index_documents(list(papers_data.values()))
     
     def process_paper(self, paper_text: str, summary_length: int = 150) -> Dict:
         """
@@ -1000,32 +919,4 @@ class ResearchPaperQASystem:
             'summary': summary,
             'original_length': len(paper_text.split()),
             'summary_length': len(summary.split())
-        }
-    
-    def answer_question_on_papers(self,
-                                  question: str,
-                                  top_k_papers: int = 3) -> Dict:
-        """
-        Answer a question by searching papers and extracting answers.
-        
-        Args:
-            question: Question to answer
-            top_k_papers: Number of papers to consider
-            
-        Returns:
-            Dictionary with answers and source information
-        """
-        # Search for relevant papers
-        relevant_papers = self.searcher.search(question, top_k=top_k_papers)
-        
-        answers = []
-        for paper, relevance_score in relevant_papers:
-            answer = self.qa_model.answer_question(question, paper)
-            answer['relevance_score'] = relevance_score
-            answers.append(answer)
-        
-        return {
-            'question': question,
-            'answers': answers,
-            'top_k': top_k_papers
         }

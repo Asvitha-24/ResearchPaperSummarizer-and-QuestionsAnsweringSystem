@@ -13,7 +13,7 @@ import pickle
 import json
 
 from src.preprocess import DataPreprocessor, DataSplitter
-from src.retrieval import SemanticRetriever, TFIDFRetriever, HybridRetriever
+from src.retrieval import TFIDFRetriever
 from src.model import ResearchPaperQASystem, SummarizationModel, QuestionAnsweringModel
 
 
@@ -90,12 +90,9 @@ def index_command(args):
     
     if retriever_type == "tfidf":
         retriever = TFIDFRetriever()
-    elif retriever_type == "semantic":
-        retriever = SemanticRetriever(model_name="all-MiniLM-L6-v2")
-    elif retriever_type == "hybrid":
-        retriever = HybridRetriever()
     else:
         print(f"❌ Unknown retriever type: {retriever_type}")
+        print(f"   Available types: tfidf")
         sys.exit(1)
     
     retriever.fit(documents)

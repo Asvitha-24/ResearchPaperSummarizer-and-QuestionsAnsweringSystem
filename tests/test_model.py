@@ -18,7 +18,6 @@ except OSError as e:
 from src.model import (
     SummarizationModel,
     QuestionAnsweringModel,
-    SemanticSearcher,
     ResearchPaperQASystem
 )
 
@@ -96,46 +95,6 @@ class TestQuestionAnsweringModel:
         assert all('answer' in r for r in results)
 
 
-class TestSemanticSearcher:
-    """Test suite for SemanticSearcher."""
-    
-    @pytest.fixture
-    def searcher(self):
-        """Initialize searcher."""
-        return SemanticSearcher()
-    
-    def test_index_documents(self, searcher):
-        """Test document indexing."""
-        documents = [
-            "Machine learning is powerful.",
-            "Deep learning uses neural networks.",
-            "NLP processes text data."
-        ]
-        
-        searcher.index_documents(documents)
-        assert searcher.documents == documents
-        assert searcher.embeddings is not None
-    
-    def test_search_valid(self, searcher):
-        """Test semantic search."""
-        documents = [
-            "The cat sat on the mat.",
-            "Dogs are loyal animals.",
-            "Birds fly in the sky."
-        ]
-        
-        searcher.index_documents(documents)
-        results = searcher.search("feline", top_k=2)
-        
-        assert len(results) <= 2
-        assert all(isinstance(r, tuple) and len(r) == 2 for r in results)
-    
-    def test_search_before_indexing(self, searcher):
-        """Test search before indexing raises error."""
-        with pytest.raises(ValueError):
-            searcher.search("query")
-
-
 class TestResearchPaperQASystem:
     """Test suite for ResearchPaperQASystem."""
     
@@ -148,7 +107,6 @@ class TestResearchPaperQASystem:
         """Test system initialization."""
         assert qa_system.summarizer is not None
         assert qa_system.qa_model is not None
-        assert qa_system.searcher is not None
     
     def test_process_paper(self, qa_system):
         """Test paper processing."""

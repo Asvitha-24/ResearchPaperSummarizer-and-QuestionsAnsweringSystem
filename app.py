@@ -618,39 +618,6 @@ def answer_question():
         }), 500
 
 
-# ==================== SEMANTIC SEARCH ====================
-@app.route('/api/search', methods=['POST'])
-def search_papers():
-    """
-    Search papers using semantic similarity
-    Expected JSON: {"query": "search term", "papers": [...], "top_k": 5}
-    """
-    try:
-        qa = get_qa_system()
-        if not qa:
-            return jsonify({'error': 'QA System not initialized'}), 500
-        
-        data = request.get_json()
-        if not data or 'query' not in data:
-            return jsonify({'error': 'Missing required field: query'}), 400
-        
-        query = data['query']
-        papers = data.get('papers', [])
-        top_k = data.get('top_k', 5)
-        
-        results = qa.retriever.search(query, papers, top_k=top_k)
-        
-        return jsonify({
-            'success': True,
-            'query': query,
-            'results': results,
-            'count': len(results)
-        }), 200
-    
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
 # ==================== DOCUMENT UPLOAD ====================
 @app.route('/api/documents/upload', methods=['POST'])
 def upload_document():
